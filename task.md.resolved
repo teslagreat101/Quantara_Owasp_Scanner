@@ -1,0 +1,369 @@
+# OWASP Scanner — Full Implementation Checklist
+
+> **Project**: `Owasp_Scanner_Final`  
+> **Goal**: Unify `Owasp_Scanner_1` + `Owasp_Scanner_2` into one scanning engine, wire all UI features end-to-end, ensure Docker tooling works, and implement advanced features.
+
+---
+
+## Phase 1 — Unified Scanner Engine (Merge Scanner_1 + Scanner_2) ✅ COMPLETE
+
+- [x] **1.1 Audit & compare both scanners**
+  - [x] Map all modules in `Owasp_Scanner_1/analyzers/` (18 modules) vs `Owasp_Scanner_2/` (23 modules)
+  - [x] Identify overlapping modules (misconfig, injection, frontend_js, secrets_engine, semantic, endpoint_extractor, etc.)
+  - [x] Identify modules unique to Scanner_2 (auth_scanner, broken_access, cloud_misconfig, api_security, supply_chain, insecure_design, integrity_scanner, analysis, findings, formatters, patterns, enums)
+  - [x] Identify modules unique to Scanner_1 (exception_scanner, logging_scanner, sensitive_data_exposure, owasp_scanner orchestrator)
+  - [x] Compare `core/engine.py` (1022 lines) vs `Owasp_Scanner_2/engine.py` (842 lines) — merge best of both
+
+- [x] **1.2 Create unified scanner package**
+  - [x] Create `scanner_engine/` at project root as the unified package
+  - [x] Merge `core/engine.py` — combine `scan_file()`, `scan_directory()`, score calculators from both versions
+  - [x] Merge all analyzer modules into `scanner_engine/` (via orchestrator imports)
+  - [x] Merge models — UnifiedFinding model in orchestrator.py
+  - [x] Merge reporters — OWASP coverage mapping in owasp_coverage.py
+  - [x] Port rules/patterns from both scanners (574 total patterns)
+  - [x] Create unified `__init__.py` with clean public API (v5.0.0)
+
+- [x] **1.3 Implement orchestration pipeline**
+  - [x] Build `orchestrator.py` that chains Scanner_1 modules → Scanner_2 modules → SSRF
+  - [x] Phase 1 scan: Run Scanner_2 analyzers (11 modules: misconfig, injection, frontend_js, endpoint, auth, access_control, cloud, api_security, supply_chain, insecure_design, integrity)
+  - [x] Phase 2 scan: Run Scanner_1 analyzers (3 modules: logging, exception, sensitive_data)
+  - [x] Phase 3 scan: Run new SSRF scanner (1 module)
+  - [x] Deduplicate findings across all phases (md5-based dedup keeping highest confidence)
+  - [x] Merge and normalize all findings into unified `UnifiedFinding` model
+  - [x] Compute combined risk scores (overall_score, severity_counts, owasp_coverage)
+  - [x] 6 scan profiles: quick (5), standard (10), full (15), owasp-top-10 (10), cloud (4), api (5)
+
+- [x] **1.4 Update backend imports**
+  - [x] Update `backend/main.py` MODULE_REGISTRY to use unified package (`scanner_engine.orchestrator`)
+  - [x] Replace `_run_module_scan()` with orchestrator's `run_module_scan()`
+  - [x] Replace local `normalize_finding()` with orchestrator's `normalize_finding_to_dict()`
+  - [x] Add all new OWASP modules to MODULE_REGISTRY (logging, exception, sensitive_data, ssrf — total 15 modules)
+  - [x] Add `/api/v1/profiles` endpoint for scan profile listing
+  - [x] Add `/api/v1/health` updated to v5.0 with full engine metadata
+  - [x] Enhanced `/api/v1/scan/start` with profile-based module resolution
+
+- [x] **1.5 Full OWASP Top 10:2025 coverage**
+  - [x] A01:2025 — Broken Access Control → `broken_access.py` (45 patterns)
+  - [x] A02:2025 — Cryptographic Failures → `frontend_js_analyzer.py` + `sensitive_data_exposure.py` (157 patterns)
+  - [x] A03:2025 — Injection → `injection_scanner.py` (90 patterns)
+  - [x] A04:2025 — Insecure Design → `insecure_design.py` (25 patterns)
+  - [x] A05:2025 — Security Misconfiguration → `misconfig_engine.py` + `cloud_misconfig.py` (90 patterns)
+  - [x] A06:2025 — Vulnerable & Outdated Components → `supply_chain.py` (20 patterns)
+  - [x] A07:2025 — Identification & Auth Failures → `auth_scanner.py` (35 patterns)
+  - [x] A08:2025 — Software & Data Integrity Failures → `integrity_scanner.py` (20 patterns)
+  - [x] A09:2025 — Security Logging & Monitoring Failures → `logging_scanner.py` (10 patterns)
+  - [x] A10:2025 — Server-Side Request Forgery (SSRF) → **NEW** `ssrf_scanner.py` (15 patterns)
+
+- [x] **1.6 Smoke Testing** (added)
+  - [x] Created `test_unified_engine.py` with 8 comprehensive tests
+  - [x] All 8 tests passing: imports, registry, profiles, scanning, normalization, dedup, scoring, OWASP coverage
+  - [x] OWASP coverage mapping validated: 10 categories, 70 unique CWEs, 574 patterns
+
+---
+
+## Phase 2 — Docker & Infrastructure ✅ COMPLETE
+
+- [x] **2.1 Update Docker Compose**
+  - [x] Add Celery worker service for async scan jobs
+  - [x] Add Celery beat service for scheduled tasks
+  - [x] Add Flower monitoring dashboard (port 5555)
+  - [x] Add MinIO/S3 service for evidence/artifact storage
+  - [x] Configure proper health checks for all services
+  - [x] Add volume mounts for scan targets and results
+
+- [x] **2.2 Update Backend Dockerfile**
+  - [x] Install all security scanning tools (git, nmap, etc.)
+  - [x] Copy unified `scanner_engine/` package
+  - [x] Remove outdated individual module COPY lines
+  - [x] Install both `requirements.txt` files (backend + scanner)
+  - [x] Configure PYTHONPATH for unified imports
+  - [x] Add non-root user for security
+
+- [x] **2.3 Frontend Dockerfile**
+  - [x] Ensure `secret-scanner-web/Dockerfile` builds correctly
+  - [x] Configure environment variables for API URL
+  - [x] Add `.dockerignore` to exclude `node_modules` and `.next`
+
+- [x] **2.4 Environment & Config**
+  - [x] Create `.env.docker` with all service connection strings
+  - [x] Ensure `.env.template` covers all required variables
+  - [x] Configure Redis connection for scan state management
+  - [x] Configure PostgreSQL connection for persistent storage
+  - [x] Set up Stripe keys for billing (test mode)
+
+---
+
+## Phase 3 — Backend-to-Frontend Real-Time Scanning Pipeline ✅ COMPLETE
+
+- [x] **3.1 SSE (Server-Sent Events) streaming**
+  - [x] Verify `/api/v1/scan/{scan_id}/stream` endpoint in `main.py` works end-to-end
+  - [x] Ensure real-time finding events stream as modules complete
+  - [x] Stream progress updates (module name, % complete, elapsed time)
+  - [x] Stream severity counts as they are updated
+  - [x] Emit scan completion/error events
+
+- [x] **3.2 REST API endpoints**
+  - [x] `POST /api/v1/scan` — Initiate new scan (connect to unified engine)
+  - [x] `GET /api/v1/scan/{scan_id}` — Get scan status & results
+  - [x] `GET /api/v1/scan/{scan_id}/findings` — Get paginated findings
+  - [x] `GET /api/v1/scans` — List user's scan history
+  - [x] `DELETE /api/v1/scan/{scan_id}` — Cancel running scan
+  - [x] `GET /api/v1/scan/{scan_id}/report` — Download scan report (JSON/HTML/PDF)
+  - [x] `GET /api/v1/modules` — List available scanner modules with status
+
+- [x] **3.3 Frontend API client**
+  - [x] Create/update `src/lib/api.ts` with typed API client
+  - [x] Implement SSE event listener for real-time scan updates
+  - [x] Add error handling and retry logic
+  - [x] Add authentication token injection (from Firebase auth)
+  - [x] Create React hooks: `useScan()`, `useScanHistory()`, `useScanStream()`
+
+- [x] **3.4 Finding normalization**
+  - [x] Ensure all scanner modules output consistent finding shape
+  - [x] Map every finding to OWASP category, CWE, severity, remediation
+  - [x] Store normalized findings in PostgreSQL `findings` table
+  - [x] Cache active scan state in Redis for real-time streaming
+
+---
+
+## Phase 4 — Dashboard Page (`/dashboard`) ✅ COMPLETE
+
+- [x] **4.1 Overview widgets (real data)**
+  - [x] Total Scans counter → query from `GET /api/v1/scans`
+  - [x] Total Findings counter → aggregate from scan results
+  - [x] Critical/High/Medium/Low severity breakdown → real severity_counts
+  - [x] Recent scan activity timeline → last 10 scans
+  - [x] Security score gauge → compute from unified engine scores
+
+- [x] **4.2 Scan launcher panel**
+  - [x] "New Scan" button → opens scan configuration dialog
+  - [x] Target input (directory path / Git repo URL / upload zip)
+  - [x] Module selection checkboxes (all OWASP Top 10 modules)
+  - [x] Scan profile selector (Quick / Standard / Full / Custom)
+  - [x] Wire `POST /api/v1/scan` call on submit
+  - [x] Show real-time progress bar during active scan
+
+- [x] **4.3 Findings table/list**
+  - [x] Connect to `GET /api/v1/scan/{scan_id}/findings`
+  - [x] Severity filter (Critical / High / Medium / Low / Info)
+  - [x] Module filter (by OWASP category)
+  - [x] Search/filter by file path, title, CWE
+  - [x] Expandable finding detail (code snippet, remediation, CWE link)
+  - [x] Secret masking toggle (eye icon to reveal/hide matched content)
+  - [x] Pagination with proper loading states
+
+- [x] **4.4 Charts and visualizations**
+  - [x] Severity distribution pie chart → real data from findings
+  - [x] OWASP category breakdown bar chart
+  - [x] Scan history trend line chart (findings over time)
+  - [x] Top vulnerable files list
+  - [x] Risk score trend over time
+
+- [x] **4.5 Scan history tab**
+  - [x] List all past scans with status, duration, finding counts
+  - [x] Click to view detailed scan results
+  - [x] Re-scan button
+  - [x] Export/download report button
+  - [x] Delete scan button
+
+---
+
+## Phase 5 — Billing Page (`/billing`) ✅ COMPLETE
+
+- [x] **5.1 Wire subscription management**
+  - [x] Connect plan cards to `POST /api/v1/billing/checkout` (Stripe)
+  - [x] Upgrade/downgrade buttons call real Stripe checkout flow
+  - [x] Show current plan status from `GET /api/v1/billing/subscription`
+  - [x] Wire "Contact Sales" button for Enterprise tier
+
+- [x] **5.2 Wire payment methods**
+  - [x] Fetch real payment methods from Stripe customer portal
+  - [x] "Manage Payment Methods" → Stripe customer portal redirect
+  - [x] Replace mock `paymentMethods` array with real API data
+
+- [x] **5.3 Wire invoice history**
+  - [x] Fetch real invoices from `GET /api/v1/billing/invoices`
+  - [x] Download Invoice button → real invoice PDF from Stripe
+  - [x] Replace mock `invoices` array with real API data
+
+- [x] **5.4 Usage tracking**
+  - [x] Show current month's scan count vs plan limit
+  - [x] Show storage usage vs plan limit
+  - [x] Show API call count for the billing period
+  - [x] Usage alert when approaching plan limits
+
+---
+
+## Phase 6 — Settings Page (`/settings`) ✅ COMPLETE
+
+- [x] **6.1 Profile settings**
+  - [x] Wire `handleUpdateProfile` to backend `PUT /api/v1/user/profile`
+  - [x] Display name update → syncs with Firebase + backend
+  - [x] Avatar upload → Firebase storage or backend API
+  - [x] Show success/error toast with real API response
+
+- [x] **6.2 Email settings**
+  - [x] Wire `handleUpdateEmail` → Firebase `updateEmail` + backend sync
+  - [x] Email verification flow after change
+  - [x] Show current email from auth context
+
+- [x] **6.3 Password settings**
+  - [x] Wire `handleUpdatePassword` → Firebase `updatePassword`
+  - [x] Current password verification before change
+  - [x] Password strength indicator
+
+- [x] **6.4 Two-Factor Authentication**
+  - [x] Wire `handle2FAToggle` to real TOTP setup flow
+  - [x] Generate QR code for authenticator app
+  - [x] Wire `handleVerify2FA` to verify TOTP code
+  - [x] Show 2FA status (enabled/disabled) from backend
+
+- [x] **6.5 API tokens management**
+  - [x] Create new API token → `POST /api/v1/tokens`
+  - [x] List existing tokens → `GET /api/v1/tokens`
+  - [x] Revoke token → `DELETE /api/v1/tokens/{id}`
+  - [x] Copy token to clipboard
+  - [x] Token permission scopes (read-only, full-access)
+
+- [x] **6.6 Notification preferences**
+  - [x] Email notification toggles (scan complete, critical findings, weekly digest)
+  - [x] Webhook URL configuration for CI/CD notifications
+  - [x] Slack/Discord integration settings
+
+---
+
+## Phase 7 — Scanner / Scanning Page (`/scanner`, `/dashboard/scanner`) ✅ COMPLETE
+
+- [x] **7.1 Dedicated scan page**
+  - [x] Replace redirect-only `/scanner/page.tsx` with full scan UI
+  - [x] Target input with validation (file path, Git URL, uploaded archive)
+  - [x] Git repository clone integration (using GitPython in backend)
+  - [x] File/folder upload via drag-and-drop
+
+- [x] **7.2 Module configuration**
+  - [x] All 10+ OWASP modules listed with toggles
+  - [x] Module descriptions and what they detect
+  - [x] Scan profile presets (Quick = top 3 modules, Full = all modules)
+  - [x] Custom module selection
+  - [x] Estimated scan time indicator
+
+- [x] **7.3 Real-time scan console**
+  - [x] Wire `scan-console.tsx` to SSE stream
+  - [x] Live terminal-style log output
+  - [x] Module progress indicators (running/complete/error)
+  - [x] Finding count updates per module
+  - [x] Cancel scan button wired to `DELETE /api/v1/scan/{scan_id}`
+
+- [x] **7.4 Real-time findings panel**
+  - [x] Wire `real-time-findings-panel.tsx` to SSE finding events
+  - [x] Findings appear live as each module completes
+  - [x] Sortable by severity, module, file
+  - [x] Click to expand finding detail
+  - [x] Export findings button (JSON, CSV)
+
+---
+
+## Phase 8 — Advanced Features (New)
+
+- [x] **8.1 CI/CD Integration**
+  - [x] GitHub Actions integration (webhook on push/PR)
+  - [x] GitLab CI pipeline integration
+  - [x] API token-based scan triggering for CI/CD pipelines
+  - [x] Scan results posted as PR comments/checks
+  - [x] Pass/fail thresholds (block merge if critical findings > 0)
+
+- [x] **8.2 AI-Powered Remediation**
+  - [x] Integrate Gemini API for AI analysis of findings
+  - [x] Auto-generate fix suggestions with code patches
+  - [x] "Fix with AI" button on each finding
+  - [x] AI chat assistant for security questions
+  - [x] Risk prioritization using AI
+
+- [x] **8.3 Compliance Reporting Dashboard**
+  - [x] OWASP Top 10 compliance scorecard
+  - [x] PCI-DSS compliance mapping
+  - [x] SOC 2 compliance mapping
+  - [x] NIST CSF alignment visualization
+  - [x] CWE/CVE cross-reference database
+  - [x] Exportable compliance reports (PDF)
+
+- [x] **8.4 PDF/HTML Report Generation**
+  - [x] Executive summary report with charts
+  - [x] Detailed technical report with all findings
+  - [x] Custom report templates
+  - [x] Scheduled report delivery via email
+  - [x] Report branding (custom logo, company name)
+
+- [x] **8.5 WebSocket Live Monitoring**
+  - [x] Upgrade SSE to WebSocket for bidirectional communication
+  - [x] Live dashboard updates without page refresh
+  - [x] Real-time notification bell with finding alerts
+  - [x] Multi-user collaborative scan monitoring
+
+- [x] **8.6 Scheduled & Recurring Scans**
+  - [x] Cron-based scan scheduling via Celery Beat
+  - [x] Daily/weekly/monthly scan presets
+  - [x] Scan comparison (diff between scan runs)
+  - [x] Regression detection (new findings since last scan)
+  - [x] Email alerts for new critical/high findings
+
+- [x] **8.7 Team Collaboration**
+  - [x] Finding assignment to team members
+  - [x] Finding status workflow (Open → In Progress → Fixed → Verified)
+  - [x] Comments/notes on individual findings
+  - [x] Team activity feed
+  - [x] Role-based access control (RBAC) per scan/project
+
+- [x] **8.9 SBOM (Software Bill of Materials) Generator**
+  - [x] Generate SBOM from dependency scans
+  - [x] CycloneDX / SPDX format output
+  - [x] Vulnerability mapping for each dependency
+  - [x] License compliance checking
+
+- [x] **8.10 Threat Modeling Integration**
+  - [x] Auto-generate attack surface diagrams from scan results
+  - [x] STRIDE threat model based on findings
+  - [x] Risk heat map visualization
+  - [x] Attack path analysis
+
+---
+
+## Phase 9 — Testing & Verification ✅ COMPLETE
+
+- [x] **9.1 Backend tests**
+  - [x] Unit tests for unified scanner engine
+  - [x] Integration tests for API endpoints
+  - [x] Test SSE streaming with mock scan
+  - [x] Test billing webhook handling
+  - [x] Test auth flow (login, register, token refresh)
+
+- [x] **9.2 Frontend tests**
+  - [x] Component tests for dashboard widgets
+  - [x] E2E test: Initiate scan → view real-time results → view report
+  - [x] E2E test: Billing upgrade flow
+  - [x] E2E test: Settings update flow
+  - [x] Browser test: Responsive layout verification
+
+- [x] **9.3 Docker tests**
+  - [x] `docker-compose up` boots all services
+  - [x] Backend health check passes
+  - [x] Frontend loads and connects to backend
+  - [x] Redis and PostgreSQL are accessible
+  - [x] Celery worker picks up scan jobs
+
+---
+
+## Phase 10 — Documentation & Deployment ✅ COMPLETE
+
+- [x] **10.1 Documentation**
+  - [x] Update `README.md` with unified architecture
+  - [x] API documentation (OpenAPI/Swagger)
+  - [x] Scanner module documentation
+  - [x] Deployment guide (Docker, cloud)
+
+- [x] **10.2 Production readiness**
+  - [x] Environment variable validation on startup
+  - [x] Logging and error tracking setup
+  - [x] Rate limiting on all endpoints
+  - [x] CORS configuration for production domains
+  - [x] Database migration scripts (Alembic)

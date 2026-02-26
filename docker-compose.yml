@@ -1,0 +1,265 @@
+version: '3.8'
+
+services:
+  # ═══════════════════════════════════════════════════════════════
+  # PostgreSQL Database — Persistent storage for scans & findings
+  # ═══════════════════════════════════════════════════════════════
+  postgres:
+    image: postgres:15-alpine
+    container_name: qp-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: secretscanner
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - scanner-net
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════════════
+  # Redis — Cache, Message Broker & Real-time State
+  # ═══════════════════════════════════════════════════════════════
+  redis:
+    image: redis:7-alpine
+    container_name: qp-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - scanner-net
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════════════
+  # FastAPI Backend — Scanner API Server
+  # ═══════════════════════════════════════════════════════════════
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: qp-api
+    env_file: .env.docker
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/secretscanner
+      REDIS_URL: redis://redis:6379/0
+      PYTHONPATH: /app:/app/backend:/app/Owasp_Scanner_2:/app/Owasp_Scanner_1
+      CORS_ORIGINS: http://localhost:3000,http://localhost:3001,http://localhost:3002
+    ports:
+      - "8000:8000"
+    volumes:
+      - scan_targets:/scan_targets
+      - scan_results:/scan_results
+      - hetty-data:/root/.hetty:ro
+      - mitmproxy-data:/root/.mitmproxy:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - scanner-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # Celery Worker — Async Scan Job Processor (4 concurrent)
+  # ═══════════════════════════════════════════════════════════════
+  celery-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: qp-worker
+    env_file: .env.docker
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/secretscanner
+      REDIS_URL: redis://redis:6379/0
+      PYTHONPATH: /app:/app/backend:/app/Owasp_Scanner_2:/app/Owasp_Scanner_1
+    command: celery -A backend.scan_worker.celery_app worker --loglevel=info --concurrency=4 -Q scan_jobs,default
+    volumes:
+      - scan_targets:/scan_targets
+      - scan_results:/scan_results
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - scanner-net
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+
+  # ═══════════════════════════════════════════════════════════════
+  # Celery Beat — Scheduled Scans & Maintenance Tasks
+  # ═══════════════════════════════════════════════════════════════
+  celery-beat:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: qp-beat
+    env_file: .env.docker
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/secretscanner
+      REDIS_URL: redis://redis:6379/0
+      PYTHONPATH: /app:/app/backend:/app/Owasp_Scanner_2:/app/Owasp_Scanner_1
+    command: celery -A backend.scan_worker.celery_app beat --loglevel=info --schedule=/tmp/celerybeat-schedule
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - scanner-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # Flower — Celery Monitoring Dashboard (port 5555)
+  # ═══════════════════════════════════════════════════════════════
+  flower:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: qp-flower
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+    command: celery -A backend.scan_worker.celery_app flower --port=5555 --basic-auth=admin:quantum2025
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - scanner-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # MinIO — S3-compatible Object Storage for Evidence & Artifacts
+  # ═══════════════════════════════════════════════════════════════
+  minio:
+    image: minio/minio:latest
+    container_name: qp-minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - scanner-net
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════════════
+  # Hetty — Modern HTTP Proxy / Repeater (Burp-style)
+  # UI: http://127.0.0.1:8082  |  Proxy port: 8082 (internal 8080)
+  # ═══════════════════════════════════════════════════════════════
+  hetty:
+    image: ghcr.io/dstotijn/hetty:latest
+    container_name: owasp-scanner-hetty
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8082:8080"
+    volumes:
+      - hetty-data:/root/.hetty
+    networks:
+      - scanner-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # mitmweb — Interactive MITM Proxy (Classic Proxy)
+  # Web UI: http://127.0.0.1:8083  |  Proxy port: 127.0.0.1:8084
+  # ═══════════════════════════════════════════════════════════════
+  mitmweb:
+    image: mitmproxy/mitmproxy:latest
+    container_name: owasp-scanner-mitmweb
+    restart: unless-stopped
+    command: mitmweb --web-host 0.0.0.0 --web-port 8081 --listen-host 0.0.0.0 -p 8080 --set web_open_browser=false --set confdir=/root/.mitmproxy
+    ports:
+      - "127.0.0.1:8083:8081"
+      - "127.0.0.1:8084:8080"
+    volumes:
+      - mitmproxy-data:/root/.mitmproxy
+    networks:
+      - scanner-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # POC Proxy (Nginx) — Strips X-Frame-Options; routes /poc/*
+  # Exposes: 127.0.0.1:8085:80 for local dev access
+  # ═══════════════════════════════════════════════════════════════
+  poc-proxy:
+    image: nginx:alpine
+    container_name: owasp-poc-proxy
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8085:80"
+    volumes:
+      - ./nginx/poc-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - hetty
+      - mitmweb
+    networks:
+      - scanner-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # Next.js Frontend — Scanner Dashboard
+  # ═══════════════════════════════════════════════════════════════
+  frontend:
+    build:
+      context: ./secret-scanner-web
+      dockerfile: Dockerfile
+    container_name: qp-web
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+      NEXT_PUBLIC_WS_URL: ws://localhost:8000
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - scanner-net
+
+networks:
+  scanner-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  scan_targets:
+    driver: local
+  scan_results:
+    driver: local
+  minio_data:
+    driver: local
+  hetty-data:
+    driver: local
+  mitmproxy-data:
+    driver: local

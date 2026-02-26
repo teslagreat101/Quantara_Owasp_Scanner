@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "quantum-protocol-scanner"
+version = "3.0.0"
+description = "Enterprise cryptographic security scanner for post-quantum readiness"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+authors = [{name = "Quantum Protocol Team"}]
+keywords = ["cryptography", "security", "quantum", "pqc", "scanner", "sast"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Security :: Cryptography",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+dependencies = []
+
+[project.optional-dependencies]
+full = [
+    "gitpython>=3.1",
+    "cryptography>=42.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "coverage>=7.0",
+    "mypy>=1.5",
+    "ruff>=0.1",
+]
+
+[project.scripts]
+quantum-scanner = "quantum_protocol.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["quantum_protocol*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "S", "B"]
+ignore = ["S101", "S603", "S607"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true

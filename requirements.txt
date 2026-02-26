@@ -1,0 +1,75 @@
+# Quantum Protocol Scanner - Python Dependencies
+# Enterprise cryptographic security scanner for post-quantum readiness
+# 
+# Installation:
+#   pip install -r requirements.txt
+#
+# For development dependencies:
+#   pip install -r requirements-dev.txt
+
+# Core functionality (mostly uses Python standard library)
+# No required external dependencies for basic scanning
+
+# ────────────────────────────────────────────────────────────────────────────
+# Optional Dependencies (recommended for full functionality)
+# ────────────────────────────────────────────────────────────────────────────
+
+# Database ORM - required for backend database functionality
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+
+# Redis client - required for backend state management
+redis>=5.0.0
+
+# FastAPI - required for backend API server
+fastapi>=0.100.0
+uvicorn>=0.23.0
+
+# Stripe - required for billing integration
+stripe>=7.0.0
+
+# Git repository scanning - required for 'scan_repository' and 'scan_repo' functions
+# Provides GitPython for cloning and analyzing Git repositories
+gitpython>=3.1.40
+
+cryptography>=42.0.0
+
+# Authentication & Security
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+bcrypt>=4.0.0
+python-multipart>=0.0.6
+
+# AI & Additional Features
+google-generativeai>=0.3.0
+sse-starlette>=1.6.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+email-validator>=2.0.0
+httpx>=0.24.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# ────────────────────────────────────────────────────────────────────────────
+# Optional Performance & Enhanced Features
+# ────────────────────────────────────────────────────────────────────────────
+
+# Quantara Template Engine - required for YAML template loading
+pyyaml>=6.0.0
+
+# Faster JSON processing (optional - falls back to standard library)
+orjson>=3.9.0; platform_machine != "wasm32"
+
+# Async HTTP client for repository downloads (optional)
+aiohttp>=3.9.0; platform_machine != "wasm32"
+
+# ────────────────────────────────────────────────────────────────────────────
+# Python Version Requirement
+# ────────────────────────────────────────────────────────────────────────────
+# Requires Python 3.10 or higher
+# 
+# The scanner uses the following standard library modules (no installation needed):
+#   - asyncio, hashlib, logging, os, re, tempfile, time
+#   - zipfile, tarfile, datetime, pathlib, typing
+#   - urllib.parse, argparse, json, sys, csv, io
+#   - math, collections, ast, string, dataclasses

@@ -1,0 +1,69 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // ── User Profiles ─────────────────────────────────────────────────────────
+    // Each user may only read/write their own document, keyed by Firebase UID.
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+
+      // Sub-collections (tasks, schedules, notifications, etc.) are also
+      // scoped to the owning user only.
+      match /{allSubcollections=**} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    // ── Customer Profiles (Stripe / legacy) ───────────────────────────────────
+    // Legacy collection used by older Stripe integration. Keyed by UID.
+    match /customers/{customerId} {
+      allow read, write: if isOwner(customerId);
+
+      match /{allSubcollections=**} {
+        allow read, write: if isOwner(customerId);
+      }
+    }
+
+    // ── Scans ─────────────────────────────────────────────────────────────────
+    // Scans store either user_id or uid field identifying the owner.
+    // We accept both field names for backward compatibility.
+    function isScanOwner() {
+      return isSignedIn() && (
+        resource.data.get("user_id", "") == request.auth.uid ||
+        resource.data.get("uid", "") == request.auth.uid ||
+        resource.data.get("customer_id", "") == request.auth.uid
+      );
+    }
+
+    function newScanOwner() {
+      return isSignedIn() && (
+        request.resource.data.get("user_id", "") == request.auth.uid ||
+        request.resource.data.get("uid", "") == request.auth.uid ||
+        request.resource.data.get("customer_id", "") == request.auth.uid
+      );
+    }
+
+    match /scans/{scanId} {
+      allow create: if newScanOwner();
+      allow read, update, delete: if isScanOwner();
+
+      // Findings and logs sub-collections inherit ownership from parent scan.
+      // We re-check ownership by reading the parent document.
+      match /{allSubcollections=**} {
+        allow read, write: if isSignedIn() &&
+          get(/databases/$(database)/documents/scans/$(scanId)).data.get("user_id", "") == request.auth.uid ||
+          get(/databases/$(database)/documents/scans/$(scanId)).data.get("uid", "") == request.auth.uid ||
+          get(/databases/$(database)/documents/scans/$(scanId)).data.get("customer_id", "") == request.auth.uid;
+      }
+    }
+  }
+}
