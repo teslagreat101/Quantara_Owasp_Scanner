@@ -1,5 +1,7 @@
 Plan: Embed Hetty + mitmweb into POC Verification Lab
-Context
+
+Context:
+
 The existing "Proof of Concept Verification" section at /dashboard/scanner is a Quick Repeater (POCConsole) + secrets viewer + AI advisor. The goal is to add Hetty and mitmweb as professional proxy tabs alongside the existing console — like Burp Repeater + Proxy — without touching any other part of the scanner page.
 
 Architecture fit:
@@ -118,6 +120,7 @@ Also add POC_PROXY_URL=http://poc-proxy to .env.docker.
 For local dev (outside Docker), expose dev fallback env: POC_PROXY_URL=http://localhost:8085 (poc-proxy maps 127.0.0.1:8085:80). Add that port mapping to the docker-compose poc-proxy service.
 
 STEP 4 — Backend FastAPI Endpoints (backend/main.py)
+
 Add four endpoints near the existing /api/poc/* block:
 
 
@@ -141,7 +144,9 @@ Backend docker-compose additions (mount CA volumes into backend):
       - scan_results:/scan_results
       - hetty-data:/root/.hetty:ro        # for CA download
       - mitmproxy-data:/root/.mitmproxy:ro  # for CA download
+
 STEP 5 — Env Files
+
 .env.template — append:
 
 
@@ -152,7 +157,9 @@ POC_PROXY_URL=http://poc-proxy
 
 
 POC_PROXY_URL=http://poc-proxy
+
 STEP 6 — Hook: use-lab-tools.ts — NEW FILE
+
 secret-scanner-web/src/hooks/use-lab-tools.ts
 
 
@@ -160,7 +167,9 @@ secret-scanner-web/src/hooks/use-lab-tools.ts
 // Returns: { hetty: LabToolStatus, mitmweb: LabToolStatus }
 // LabToolStatus: { running: boolean; url: string; loading: boolean }
 // Provides: downloadCA(tool: 'hetty' | 'mitmproxy') — triggers browser download
+
 STEP 7 — Component: AdvancedProxyLab.tsx — NEW FILE
+
 secret-scanner-web/src/components/dashboard/scanner/poc/AdvancedProxyLab.tsx
 
 Layout:
@@ -189,7 +198,9 @@ Auto-refreshes iframe key when tool transitions to running
 CA Install Guide: collapsible <details> panel with step-by-step text instructions
 Keyboard shortcut Ctrl+Shift+H: handled at document level in useEffect, switches to Hetty tab
 No transitions on .iframe-container scale/opacity (just opacity + transform per design rules)
+
 STEP 8 — Modify: POCSection.tsx
+
 Minimal change — add a 3-tab bar just above the existing content area, inside the AnimatePresence / motion.div:
 
 
@@ -200,8 +211,11 @@ activeLabTab === 'hetty': render <AdvancedProxyLab tool="hetty" isActive={true} 
 activeLabTab === 'mitmweb': render <AdvancedProxyLab tool="mitmweb" isActive={true} />
 Status dot (●) next to Hetty/mitmweb tab pulled from use-lab-tools hook
 The "Standby" state only shows on repeater tab when no findings; Hetty/mitmweb tabs always accessible
+
 Files to Create/Modify
+
 File	Action
+
 docker-compose.yml	Modify — add hetty, mitmweb, poc-proxy services + volumes
 nginx/poc-proxy.conf	CREATE — nginx reverse proxy config
 backend/main.py	Modify — add 3 /api/lab/ endpoints
@@ -212,7 +226,9 @@ secret-scanner-web/src/hooks/use-lab-tools.ts	CREATE
 secret-scanner-web/src/components/dashboard/scanner/poc/AdvancedProxyLab.tsx	CREATE
 secret-scanner-web/src/components/dashboard/scanner/poc/POCSection.tsx	Modify — add 3-tab bar
 Verification
+
 docker-compose up -d — verify hetty, mitmweb, poc-proxy containers start
+
 curl http://127.0.0.1:8082 — confirm hetty UI responds
 curl http://127.0.0.1:8083 — confirm mitmweb UI responds
 curl http://127.0.0.1:8085/poc/hetty/ — confirm nginx strips X-Frame-Options
@@ -257,7 +273,9 @@ Step 6: Create use-lab-tools.ts hook
 Step 7: Create AdvancedProxyLab.tsx component
 
 Step 8: Add 3-tab bar to POCSection.tsx
+
 Step 1 — Docker Compose
+
 Edit c:\Users\HP\Music\AGI-Full_Stack\Owasp_Scanner_Final\docker-compose.yml
 Added 50 lines
 Now add the CA volumes to the backend service and the new volumes at the bottom:
@@ -265,8 +283,10 @@ Now add the CA volumes to the backend service and the new volumes at the bottom:
 Edit c:\Users\HP\Music\AGI-Full_Stack\Owasp_Scanner_Final\docker-compose.yml
 Added 2 lines
 Edit c:\Users\HP\Music\AGI-Full_Stack\Owasp_Scanner_Final\docker-compose.yml
+
 Added 4 lines
-Update Todos
+
+Update Todos: 
 
 Step 1: Add hetty, mitmweb, poc-proxy services to docker-compose.yml
 
@@ -283,6 +303,7 @@ Step 6: Create use-lab-tools.ts hook
 Step 7: Create AdvancedProxyLab.tsx component
 
 Step 8: Add 3-tab bar to POCSection.tsx
+
 Step 2 — Create nginx config
 Bash Create nginx directory
 IN

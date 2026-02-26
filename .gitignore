@@ -87,3 +87,12 @@ next-env.d.ts
 .vercel
 tmp/
 temp/
+
+__pycache__/
+*.pyc
+.env
+node_modules/
+venv/
+outputs/
+scans/
+logs/
