@@ -1,4 +1,4 @@
-# Quantum Protocol v4.0 — Local Development Setup
+# Quantara_Quantum Protocol v5.0 — Local Development Setup
 
 ## Prerequisites
 
