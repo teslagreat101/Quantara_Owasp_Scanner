@@ -127,7 +127,7 @@ class User(Base):
     stripe_subscription_id = Column(String(255), nullable=True)
     
     # Usage limits
-    monthly_scan_limit = Column(Integer, default=5)
+    monthly_scan_limit = Column(Integer, default=10)
     storage_limit_mb = Column(Integer, default=100)
     
     # Timestamps

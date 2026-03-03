@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 import math
+import time as _fe_time
 from dataclasses import dataclass, field
 from typing import Optional
 from pathlib import Path
@@ -453,3 +454,116 @@ def scan_frontend_directory(
             continue
 
     return all_findings
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Enterprise Integration Layer — added by enterprise refactor
+# ─────────────────────────────────────────────────────────────────────────────
+import logging as _fe_logging
+
+_fe_logger = _fe_logging.getLogger("enterprise.scanner.frontend_js")
+
+
+def normalize_frontend_finding(f, scan_id: str = "") -> dict:
+    """Convert FrontendFinding to NormalizedFinding-compatible dict."""
+    return {
+        "id": f.id,
+        "scanner_source": "frontend_js",
+        "module": "frontend_js",
+        "category": getattr(f, "category", "Frontend Security"),
+        "severity": f.severity.lower(),
+        "title": f.title,
+        "description": f.description,
+        "matched_content": f.matched_content,
+        "cwe": getattr(f, "cwe", "CWE-200"),
+        "owasp": "A02:2025",
+        "file": f.file,
+        "line_number": f.line_number,
+        "confidence": f.confidence,
+        "remediation": getattr(f, "remediation", ""),
+        "tags": list(getattr(f, "tags", [])) + ["frontend", "client-side"],
+        "scan_id": scan_id,
+    }
+
+
+def scan_frontend_file_telemetry(
+    content: str,
+    filepath: str,
+    base_path: str = "",
+    scan_id: str = "",
+) -> tuple[list, dict]:
+    """Wraps scan_frontend_file() with structured telemetry."""
+    start = _fe_time.monotonic()
+    findings = scan_frontend_file(content, filepath, base_path)
+    elapsed_ms = (_fe_time.monotonic() - start) * 1000
+    telemetry = {
+        "scanner": "frontend_js",
+        "scan_id": scan_id,
+        "file": filepath,
+        "findings_count": len(findings),
+        "duration_ms": round(elapsed_ms, 2),
+        "timestamp": _fe_time.time(),
+    }
+    return findings, telemetry
+
+
+def scan_frontend_directory_enterprise(
+    root: str,
+    max_files: int = 50_000,
+    scan_id: str = "",
+    on_finding=None,
+) -> tuple[list, dict]:
+    """
+    Enterprise wrapper for scan_frontend_directory().
+    Adds structured telemetry + optional real-time finding callback.
+    """
+    from pathlib import Path as _Path
+    start = _fe_time.time()
+    findings, files_scanned = [], 0
+    _skip_dirs = {
+        "node_modules", ".git", ".next", "dist", "build",
+        "__pycache__", ".venv", "venv", "vendor", ".cache", "coverage",
+    }
+
+    for fpath in _Path(root).rglob("*"):
+        if files_scanned >= max_files:
+            break
+        if fpath.is_dir() or any(skip in fpath.parts for skip in _skip_dirs):
+            continue
+        if not is_frontend_file(str(fpath)):
+            continue
+        try:
+            content = fpath.read_text(encoding="utf-8", errors="ignore")
+            if len(content) > 5_000_000:
+                continue
+            file_findings, _ = scan_frontend_file_telemetry(
+                content, str(fpath), root, scan_id=scan_id
+            )
+            for f in file_findings:
+                findings.append(f)
+                if on_finding:
+                    try:
+                        on_finding(normalize_frontend_finding(f, scan_id))
+                    except Exception:
+                        pass
+            files_scanned += 1
+        except (OSError, PermissionError):
+            continue
+
+    telemetry = {
+        "scanner": "frontend_js",
+        "scan_id": scan_id,
+        "root": root,
+        "files_scanned": files_scanned,
+        "findings_count": len(findings),
+        "duration_ms": round((_fe_time.time() - start) * 1000, 2),
+        "severity_breakdown": {
+            sev: sum(1 for f in findings if f.severity.lower() == sev)
+            for sev in ["critical", "high", "medium", "low", "info"]
+        },
+    }
+    _fe_logger.info(
+        f"frontend_js_scanner: {len(findings)} findings across {files_scanned} files "
+        f"in {telemetry['duration_ms']:.0f}ms"
+    )
+    return findings, telemetry

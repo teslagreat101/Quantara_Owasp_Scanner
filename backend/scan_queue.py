@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # Configuration constants
 # ──────────────────────────────────────────────────────────────────────────────
 
-MAX_GLOBAL_SCANS: int = 10          # hard cap on simultaneous scan executions
+MAX_GLOBAL_SCANS: int = 5           # hard cap on simultaneous scan executions
 MAX_SCANS_PER_USER: int = 2         # per-user active scan limit
 SCAN_TTL_SECONDS: int = 3600        # 1 hour — remove completed scans from memory
 CLEANUP_INTERVAL_SECONDS: int = 1800  # sweep every 30 minutes

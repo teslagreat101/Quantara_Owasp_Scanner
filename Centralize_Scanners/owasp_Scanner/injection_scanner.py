@@ -18,6 +18,7 @@ Supports: Python, Java, Go, JavaScript/TypeScript, PHP, Ruby, C#
 from __future__ import annotations
 
 import re
+import time as _time
 from dataclasses import dataclass, field
 from typing import Optional
 from pathlib import Path
@@ -456,3 +457,135 @@ def scan_injection_directory(
             continue
 
     return all_findings
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Enterprise Integration Layer — added by enterprise refactor
+# Provides: telemetry, NormalizedFinding export, BaseScanner compatibility
+# Does NOT modify any existing logic above.
+# ─────────────────────────────────────────────────────────────────────────────
+import logging as _logging
+
+_inj_logger = _logging.getLogger("enterprise.scanner.injection")
+
+
+def normalize_injection_finding(f: InjectionFinding, scan_id: str = "") -> dict:
+    """
+    Convert an InjectionFinding to a NormalizedFinding-compatible dict.
+    Compatible with orchestrator.normalize_finding() and BaseScanner.
+    """
+    return {
+        "id": f.id,
+        "scanner_source": "injection",
+        "module": "injection",
+        "category": f.category,
+        "severity": f.severity.lower(),
+        "title": f.title,
+        "description": f.description,
+        "matched_content": f.matched_content,
+        "cwe": f.cwe,
+        "owasp": "A03:2025",
+        "file": f.file,
+        "line_number": f.line_number,
+        "confidence": f.confidence,
+        "remediation": f.remediation,
+        "tags": list(f.tags) + [f.injection_type, "injection"],
+        "scan_id": scan_id,
+        "language": f.language,
+    }
+
+
+def scan_injection_file_telemetry(
+    content: str,
+    filepath: str,
+    base_path: str = "",
+    scan_id: str = "",
+) -> tuple[list[InjectionFinding], dict]:
+    """
+    Wraps scan_injection_file() with structured telemetry.
+    Returns (findings, telemetry_dict).
+    """
+    start = _time.monotonic()
+    findings = scan_injection_file(content, filepath, base_path)
+    elapsed_ms = (_time.monotonic() - start) * 1000
+
+    telemetry = {
+        "scanner": "injection",
+        "scan_id": scan_id,
+        "file": filepath,
+        "findings_count": len(findings),
+        "duration_ms": round(elapsed_ms, 2),
+        "timestamp": _time.time(),
+    }
+    if findings:
+        _inj_logger.info(
+            f"injection_scanner: {len(findings)} findings in {filepath} ({elapsed_ms:.1f}ms)"
+        )
+    return findings, telemetry
+
+
+def scan_injection_directory_enterprise(
+    root: str,
+    max_files: int = 50_000,
+    scan_id: str = "",
+    on_finding=None,
+) -> tuple[list[InjectionFinding], dict]:
+    """
+    Enterprise wrapper for scan_injection_directory().
+    Adds per-file telemetry, structured logging, and optional real-time callback.
+
+    Args:
+        root: Directory to scan
+        max_files: Maximum files to process
+        scan_id: Correlation ID for this scan session
+        on_finding: Optional callback(finding) for real-time streaming
+
+    Returns:
+        (findings, summary_telemetry)
+    """
+    start = _time.time()
+    findings, files_scanned = [], 0
+
+    root_path = Path(root)
+    for fpath in root_path.rglob("*"):
+        if files_scanned >= max_files:
+            break
+        if fpath.is_dir() or any(skip in fpath.parts for skip in SKIP_DIRS):
+            continue
+        if fpath.suffix.lower() not in SCAN_EXTENSIONS:
+            continue
+        try:
+            content = fpath.read_text(encoding="utf-8", errors="ignore")
+            if len(content) > 5_000_000:
+                continue
+            file_findings, _ = scan_injection_file_telemetry(
+                content, str(fpath), str(root_path), scan_id=scan_id
+            )
+            for f in file_findings:
+                findings.append(f)
+                if on_finding:
+                    try:
+                        on_finding(normalize_injection_finding(f, scan_id))
+                    except Exception:
+                        pass
+            files_scanned += 1
+        except (OSError, PermissionError):
+            continue
+
+    telemetry = {
+        "scanner": "injection",
+        "scan_id": scan_id,
+        "root": root,
+        "files_scanned": files_scanned,
+        "findings_count": len(findings),
+        "duration_ms": round((_time.time() - start) * 1000, 2),
+        "severity_breakdown": {
+            sev: sum(1 for f in findings if f.severity.lower() == sev)
+            for sev in ["critical", "high", "medium", "low", "info"]
+        },
+    }
+    _inj_logger.info(
+        f"injection_scanner: {len(findings)} findings across {files_scanned} files "
+        f"in {telemetry['duration_ms']:.0f}ms"
+    )
+    return findings, telemetry

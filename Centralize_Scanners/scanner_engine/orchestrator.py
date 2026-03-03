@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 import hashlib
 import logging
 import tempfile
@@ -109,6 +110,20 @@ except ImportError as _ent_err:
     _ENTERPRISE_AVAILABLE = False
     logger.warning(f"Quantara Enterprise feature modules not available: {_ent_err}")
 
+# ── Import PQSI Agents (Post-Quantum Security Intelligence) ──
+try:
+    from quantum_protocol.agents.pqc_fingerprint_agent import PQCFingerprintAgent
+    from quantum_protocol.agents.crypto_harvest_analyzer import CryptoHarvestAnalyzer
+    from quantum_protocol.agents.pqc_library_engine import PQCLibraryEngine
+    from quantum_protocol.agents.quantum_recon_agent import QuantumReconAgent
+    from quantum_protocol.intelligence.quantum_timeline import QuantumTimelineEngine
+    from quantum_protocol.core.engine import compute_qqsi_score
+    _PQSI_AVAILABLE = True
+    logger.info("PQSI agents (Post-Quantum Security Intelligence) loaded successfully")
+except ImportError as _pqsi_err:
+    _PQSI_AVAILABLE = False
+    logger.warning(f"PQSI agents not available: {_pqsi_err}")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Smart Target Type Detection
@@ -165,6 +180,13 @@ class UnifiedFinding:
     agent_verdict: str = ""
     patch_suggestion: str = ""
     taint_flow: str = ""
+    # PQSI fields
+    data_longevity_estimate: str = ""
+    hndl_probability_score: float = 0.0
+    future_decryption_risk: str = ""
+    quantum_exposure_years: float = 0.0
+    migration_urgency: str = ""
+    pqc_adoption_index: float = 0.0
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -323,6 +345,31 @@ UNIFIED_MODULE_REGISTRY = {
         "description": "Multi-LLM enrichment: TP/FP verdict, business impact, code remediation, attack narrative, POC fix — Gemini→Claude→GPT fallback chain",
         "requires_enterprise": True,
     },
+    # Phase 8: Post-Quantum Security Intelligence (PQSI)
+    "pqsi_fingerprint": {
+        "name": "PQC Fingerprint Agent", "owasp": "Crypto-Agility", "phase": 8,
+        "scan_file": None, "scan_dir": None, "pattern_count": 80,
+        "description": "Detects PQC deployments: CRYSTALS-Kyber/Dilithium, Falcon, SPHINCS+, BIKE, McEliece, hybrid TLS, oqsprovider, liboqs",
+        "requires_pqsi": True,
+    },
+    "pqsi_harvest": {
+        "name": "Crypto Harvest Analyzer", "owasp": "HNDL-Defense", "phase": 8,
+        "scan_file": None, "scan_dir": None, "pattern_count": 60,
+        "description": "Detects HNDL preparation: packet capture, TLS session logging, traffic mirroring, ciphertext storage, certificate scraping",
+        "requires_pqsi": True,
+    },
+    "pqsi_library": {
+        "name": "PQC Library Intelligence", "owasp": "Crypto-Agility", "phase": 8,
+        "scan_file": None, "scan_dir": None, "pattern_count": 40,
+        "description": "PQC library adoption scanning with Post-Quantum Adoption Index (0-100): liboqs, BoringSSL-PQ, wolfSSL, AWS-LC, CIRCL",
+        "requires_pqsi": True,
+    },
+    "pqsi_recon": {
+        "name": "Quantum Recon Detection", "owasp": "Threat-Intel", "phase": 8,
+        "scan_file": None, "scan_dir": None, "pattern_count": 50,
+        "description": "Detects quantum reconnaissance: mass cert enumeration, crypto inventory scanning, TLS probing, encrypted dataset indexing",
+        "requires_pqsi": True,
+    },
 }
 
 
@@ -340,6 +387,8 @@ def normalize_finding(finding: Any, module_key: str) -> UnifiedFinding:
         scanner_source = "quantum"
     elif module_key == "code_agent":
         scanner_source = "code_agent"
+    elif module_key.startswith("pqsi_"):
+        scanner_source = "pqsi"
     elif module_key in (
         "quantara_http", "quantara_crawler", "quantara_auth",
         "quantara_fp_reducer", "quantara_oast", "quantara_chains", "quantara_ai",
@@ -392,7 +441,21 @@ def normalize_finding(finding: Any, module_key: str) -> UnifiedFinding:
             if not result.cwe:
                 result.cwe = finding.migration.get("cwe", "")
         result.quantum_risk = str(getattr(finding, "risk", ""))
-        result.scanner_source = "quantum"
+        if scanner_source != "pqsi":
+            result.scanner_source = "quantum"
+        # PQSI enrichment fields
+        if hasattr(finding, "data_longevity_estimate") and finding.data_longevity_estimate:
+            result.data_longevity_estimate = str(finding.data_longevity_estimate)
+        if hasattr(finding, "hndl_probability_score") and finding.hndl_probability_score:
+            result.hndl_probability_score = float(finding.hndl_probability_score)
+        if hasattr(finding, "future_decryption_risk") and finding.future_decryption_risk:
+            result.future_decryption_risk = str(finding.future_decryption_risk)
+        if hasattr(finding, "quantum_exposure_years") and finding.quantum_exposure_years:
+            result.quantum_exposure_years = float(finding.quantum_exposure_years)
+        if hasattr(finding, "migration_urgency") and finding.migration_urgency:
+            result.migration_urgency = str(finding.migration_urgency)
+        if hasattr(finding, "pqc_adoption_index") and finding.pqc_adoption_index:
+            result.pqc_adoption_index = float(finding.pqc_adoption_index)
 
     # code_security_scanner ValidatedFinding format
     if hasattr(finding, "verdict") and hasattr(finding, "patch_suggestions"):
@@ -550,6 +613,10 @@ def run_module_scan(module_key: str, target: str, scan_type: str = "directory", 
         logger.warning(f"Skipping {module_key} — code_security_scanner not available")
         return []
 
+    if meta.get("requires_pqsi") and not _PQSI_AVAILABLE:
+        logger.warning(f"Skipping {module_key} — PQSI agents not available")
+        return []
+
     if meta.get("requires_quantara") and not _QUANTARA_AVAILABLE:
         logger.warning(f"Skipping {module_key} — quantara_scanner not available")
         return []
@@ -565,6 +632,12 @@ def run_module_scan(module_key: str, target: str, scan_type: str = "directory", 
     # GitHub URLs → quantum_protocol repo scan
     if effective_scan_type == "github" or _GITHUB_PATTERN.match(target or ""):
         return _run_github_scan(module_key, target)
+
+    # PQSI agents — Phase 8
+    if module_key.startswith("pqsi_") and meta.get("requires_pqsi"):
+        if not _PQSI_AVAILABLE:
+            return []
+        return _run_pqsi_agent(module_key, target, effective_scan_type)
 
     # quantum_pqc — directory (ScanMode.QUANTUM) or GitHub repo
     if module_key == "quantum_pqc":
@@ -626,6 +699,53 @@ def run_module_scan(module_key: str, target: str, scan_type: str = "directory", 
         return _scan_url_live(target, module_key)
 
     return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+_PQSI_AGENT_MAP = {
+    "pqsi_fingerprint": "PQCFingerprintAgent",
+    "pqsi_harvest": "CryptoHarvestAnalyzer",
+    "pqsi_library": "PQCLibraryEngine",
+    "pqsi_recon": "QuantumReconAgent",
+}
+
+
+def _run_pqsi_agent(module_key: str, target: str, scan_type: str) -> list:
+    """Route PQSI module to the appropriate agent class."""
+    if not _PQSI_AVAILABLE:
+        return []
+
+    agent_cls_name = _PQSI_AGENT_MAP.get(module_key)
+    if not agent_cls_name:
+        logger.warning(f"Unknown PQSI module: {module_key}")
+        return []
+
+    # Resolve agent class
+    agent_classes = {
+        "PQCFingerprintAgent": PQCFingerprintAgent,
+        "CryptoHarvestAnalyzer": CryptoHarvestAnalyzer,
+        "PQCLibraryEngine": PQCLibraryEngine,
+        "QuantumReconAgent": QuantumReconAgent,
+    }
+    agent_cls = agent_classes.get(agent_cls_name)
+    if not agent_cls:
+        return []
+
+    try:
+        agent = agent_cls()
+        if scan_type == "directory" and os.path.isdir(target):
+            logger.info(f"[{module_key}] Running PQSI agent on directory: {target}")
+            return agent.scan_directory(target)
+        elif scan_type == "code":
+            logger.info(f"[{module_key}] Running PQSI agent on inline code")
+            return agent.scan_file(target, "paste_input.py", "python")
+        else:
+            logger.debug(f"[{module_key}] PQSI agent skipped for scan_type={scan_type}")
+            return []
+    except Exception as e:
+        logger.error(f"PQSI agent {module_key} failed: {e}")
+        return []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -919,7 +1039,6 @@ def _run_quantara_fp_reducer(url: str) -> list:
 def _run_quantara_oast(url: str) -> list:
     """Run OAST tests for blind SSRF, XSS, CMDi, XXE via interactsh/local listener."""
     try:
-        import time
         findings = []
         with QuantaraOAST(mode="auto", poll_timeout=20.0) as oast:
             if not oast.start():
@@ -1562,6 +1681,11 @@ SCAN_PROFILES = {
         "description": "Pure Quantara-template-driven live HTTP vulnerability scan",
         "modules": ["quantara_http"],
     },
+    "pqsi": {
+        "name": "Quantum Security Intelligence",
+        "description": "Full PQSI assessment: PQC adoption, HNDL detection, quantum recon, timeline analysis",
+        "modules": ["quantum_pqc", "pqsi_fingerprint", "pqsi_harvest", "pqsi_library", "pqsi_recon", "sensitive_data"],
+    },
 }
 
 
@@ -1577,7 +1701,8 @@ def get_available_modules() -> list[dict]:
             "available": (
                 (not m.get("requires_scanner1") or _SCANNER1_AVAILABLE) and
                 (not m.get("requires_code_scanner") or _CODE_SCANNER_AVAILABLE) and
-                (not m.get("requires_quantara") or _QUANTARA_AVAILABLE)
+                (not m.get("requires_quantara") or _QUANTARA_AVAILABLE) and
+                (not m.get("requires_pqsi") or _PQSI_AVAILABLE)
             ),
         }
         for k, m in UNIFIED_MODULE_REGISTRY.items()
@@ -1589,3 +1714,164 @@ def get_available_profiles() -> list[dict]:
         {"key": k, "name": p["name"], "description": p["description"], "module_count": len(p["modules"])}
         for k, p in SCAN_PROFILES.items()
     ]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Enterprise Pipeline Integration — added by enterprise refactor
+# Wires in: BaseScanner registry, Scheduler, Analyzer, BehaviorAnalyzer,
+# AdaptiveEngine, PayloadContextDetector, PayloadMutator, Payload packs
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _load_enterprise_engines() -> dict:
+    """
+    Lazy-load all enterprise engines.
+    Returns a dict of available engine references.
+    Safe to call even if optional deps are missing.
+    """
+    engines = {}
+    _base_dir = os.path.dirname(__file__)
+
+    try:
+        from scanner_engine.base_scanner import ScannerRegistry, BaseScanner
+        engines["registry"] = ScannerRegistry
+        engines["base_scanner"] = BaseScanner
+    except ImportError:
+        pass
+
+    try:
+        from scanner_engine.scheduler import EnterpriseScheduler, get_scheduler
+        engines["scheduler"] = get_scheduler
+    except ImportError:
+        pass
+
+    try:
+        from scanner_engine.analyzer import (
+            DifferentialAnalyzer, ProbeSession, BlindInjectionAnalyzer,
+        )
+        engines["analyzer"] = DifferentialAnalyzer
+        engines["probe_session"] = ProbeSession
+        engines["blind_analyzer"] = BlindInjectionAnalyzer
+    except ImportError:
+        pass
+
+    try:
+        from scanner_engine.behavior_analyzer import BehaviorAnalyzer, create_behavior_analyzer
+        engines["behavior_analyzer"] = create_behavior_analyzer
+    except ImportError:
+        pass
+
+    try:
+        from scanner_engine.adaptive_engine import AdaptiveEscalationEngine, AttackChainCorrelator
+        engines["adaptive_engine"] = AdaptiveEscalationEngine
+        engines["chain_correlator"] = AttackChainCorrelator
+    except ImportError:
+        pass
+
+    try:
+        from scanner_engine.payload_context_detector import (
+            PayloadContextDetector, detect_context, detect_all_contexts
+        )
+        engines["context_detector"] = PayloadContextDetector
+        engines["detect_context"] = detect_context
+    except ImportError:
+        pass
+
+    try:
+        from scanner_engine.payload_mutator import (
+            PayloadMutator, generate_variants, generate_xss_variants,
+            generate_sqli_variants, generate_ssti_variants,
+        )
+        engines["mutator"] = PayloadMutator
+        engines["generate_variants"] = generate_variants
+    except ImportError:
+        pass
+
+    try:
+        from scanner_engine.payloads import get_pack, list_packs
+        engines["payload_pack"] = get_pack
+        engines["payload_packs"] = list_packs
+    except ImportError:
+        pass
+
+    return engines
+
+
+# Singleton — loaded once at module level
+_ENTERPRISE_ENGINES: dict = {}
+
+try:
+    _ENTERPRISE_ENGINES = _load_enterprise_engines()
+    _engines_loaded = list(_ENTERPRISE_ENGINES.keys())
+    logger.info(f"Enterprise engines loaded: {_engines_loaded}")
+except Exception as _ee:
+    logger.warning(f"Enterprise engine load warning: {_ee}")
+
+
+def get_enterprise_engine(name: str):
+    """Retrieve a loaded enterprise engine by name. Returns None if unavailable."""
+    return _ENTERPRISE_ENGINES.get(name)
+
+
+def enterprise_scan_summary(findings: list) -> dict:
+    """
+    Post-scan enterprise summary with attack chain correlation.
+    Appends attack chain data to the standard scan summary.
+    """
+    correlator_cls = _ENTERPRISE_ENGINES.get("chain_correlator")
+    chains = []
+    if correlator_cls:
+        try:
+            finding_dicts = [f if isinstance(f, dict) else (asdict(f) if hasattr(f, '__dataclass_fields__') else vars(f)) for f in findings]
+            chains = correlator_cls().correlate(finding_dicts)
+        except Exception as e:
+            logger.warning(f"Attack chain correlation failed: {e}")
+
+    severity_counts = {}
+    for f in findings:
+        sev = (f.get("severity") if isinstance(f, dict) else getattr(f, "severity", "info") or "info").lower()
+        severity_counts[sev] = severity_counts.get(sev, 0) + 1
+
+    return {
+        "total_findings": len(findings),
+        "severity_breakdown": severity_counts,
+        "attack_chains": chains,
+        "attack_chain_count": len(chains),
+        "engines_available": list(_ENTERPRISE_ENGINES.keys()),
+    }
+
+
+def get_payload_pack(pack_name: str) -> list:
+    """Get a payload pack by name using the enterprise payload library."""
+    fn = _ENTERPRISE_ENGINES.get("payload_pack")
+    if fn:
+        return fn(pack_name)
+    return []
+
+
+def mutate_payload(payload: str, mutation_types: list | None = None) -> list:
+    """
+    Generate 50-200 mutated variants of a payload using the enterprise mutation engine.
+    Falls back to [payload] if the mutator is unavailable.
+    """
+    fn = _ENTERPRISE_ENGINES.get("generate_variants")
+    if fn:
+        try:
+            return fn(payload, mutation_types=mutation_types)
+        except Exception:
+            pass
+    return [payload]
+
+
+def detect_injection_context(response_body: str, reflected_value: str | None = None) -> dict:
+    """
+    Detect the injection context in a response body.
+    Returns context information for context-aware payload selection.
+    """
+    fn = _ENTERPRISE_ENGINES.get("detect_context")
+    if fn:
+        try:
+            result = fn(response_body, reflected_value)
+            return result.to_dict() if hasattr(result, "to_dict") else {"context": str(result)}
+        except Exception:
+            pass
+    return {"context": "unknown", "confidence": 0.0}

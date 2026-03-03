@@ -710,3 +710,108 @@ def verify_finding(
         injection_type=injection_type,
         original_confidence=confidence,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Enterprise Integration Layer — added by enterprise refactor
+# Wires the FP reducer into the enterprise DifferentialAnalyzer for
+# multi-signal false positive filtering with similarity + entropy scoring.
+# ─────────────────────────────────────────────────────────────────────────────
+import logging as _fp_logging
+
+_fp_logger = _fp_logging.getLogger("enterprise.scanner.fp_reducer")
+
+
+def verify_with_differential(
+    url: str,
+    payload: str,
+    injection_type: str,
+    baseline_body: str,
+    probe_body: str,
+    baseline_time_ms: float = 0.0,
+    probe_time_ms: float = 0.0,
+    baseline_status: int = 200,
+    probe_status: int = 200,
+    original_confidence: float = 0.75,
+) -> dict:
+    """
+    Enhanced FP verification using the enterprise DifferentialAnalyzer.
+
+    Combines:
+    1. Levenshtein similarity (large diff → genuine finding)
+    2. Entropy shift (encrypted/random data change → suspicious)
+    3. Timing delta (slow probe → possible blind injection)
+    4. Status code change
+    5. Payload reflection check
+
+    Returns a dict with:
+    - is_false_positive: bool
+    - adjusted_confidence: float
+    - verdict: str
+    - evidence: dict
+    """
+    import importlib
+    import sys
+    import os
+
+    # Resolve DifferentialAnalyzer via importlib (avoids static import errors)
+    _engine_dir = os.path.normpath(
+        os.path.join(os.path.dirname(__file__), "..", "scanner_engine")
+    )
+    if _engine_dir not in sys.path:
+        sys.path.insert(0, _engine_dir)
+
+    try:
+        analyzer_mod = importlib.import_module("analyzer")
+        HttpSnapshot = getattr(analyzer_mod, "HttpSnapshot")
+        DifferentialAnalyzer = getattr(analyzer_mod, "DifferentialAnalyzer")
+        AnalysisVerdict = getattr(analyzer_mod, "AnalysisVerdict")
+    except (ImportError, AttributeError):
+        # Fallback: just return original confidence unchanged
+        return {
+            "is_false_positive": original_confidence < 0.4,
+            "adjusted_confidence": original_confidence,
+            "verdict": "inconclusive",
+            "evidence": {"note": "DifferentialAnalyzer not available"},
+        }
+
+    baseline = HttpSnapshot(
+        status_code=baseline_status,
+        body=baseline_body,
+        response_time_ms=baseline_time_ms,
+        content_length=len(baseline_body),
+    )
+    probe = HttpSnapshot(
+        status_code=probe_status,
+        body=probe_body,
+        response_time_ms=probe_time_ms,
+        content_length=len(probe_body),
+        payload_used=payload,
+    )
+
+    diff_analyzer = DifferentialAnalyzer(baseline)
+    diff_result = diff_analyzer.compare(probe, payload=payload)
+
+    # Cross-reference differential verdict with FP reducer
+    is_fp = diff_result.verdict in (
+        AnalysisVerdict.CLEAN, AnalysisVerdict.WAF_FILTERED
+    )
+    # Weight adjusted confidence from both signals
+    combined = (original_confidence * 0.6) + (diff_result.confidence * 0.4)
+
+    _fp_logger.debug(
+        f"verify_with_differential: url={url} injection={injection_type} "
+        f"differential_verdict={diff_result.verdict.value} "
+        f"original_conf={original_confidence:.2f} combined={combined:.2f} is_fp={is_fp}"
+    )
+
+    return {
+        "is_false_positive": is_fp,
+        "adjusted_confidence": round(combined, 3),
+        "verdict": diff_result.verdict.value,
+        "similarity_score": diff_result.similarity_score,
+        "timing_delta_ms": diff_result.timing_delta_ms,
+        "anomalies": [a.value for a in diff_result.anomalies],
+        "waf_signals": diff_result.waf_signals,
+        "evidence": diff_result.evidence,
+    }

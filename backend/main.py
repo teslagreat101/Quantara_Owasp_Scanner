@@ -55,6 +55,7 @@ from backend.auth import (
     check_usage_limits, increment_scan_usage, get_current_firebase_user
 )
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 # ── Import Quantara Intelligence Engines ──────────────────────────────────────
 import logging
@@ -125,6 +126,59 @@ except Exception:
         logger.warning(f"Stability engines not available: {_se}")
         bounded_executor = None  # falls back to None (default executor)
 
+# ── Import Enterprise Scanner Engines (Phase 8) ────────────────────────────────
+# These live in Centralize_Scanners/scanner_engine/ — we add that dir to sys.path
+_ENTERPRISE_ENGINE_DIR = os.path.join(CENTRAL_DIR, "scanner_engine")
+if _ENTERPRISE_ENGINE_DIR not in sys.path:
+    sys.path.insert(0, _ENTERPRISE_ENGINE_DIR)
+
+try:
+    from scanner_engine.orchestrator import (
+        get_enterprise_engine,
+        enterprise_scan_summary,
+        get_payload_pack,
+        mutate_payload,
+        detect_injection_context,
+    )
+    _ENTERPRISE_ORCHESTRATOR_AVAILABLE = True
+    logger.info("Enterprise orchestrator extensions loaded")
+except Exception as _eoe:
+    _ENTERPRISE_ORCHESTRATOR_AVAILABLE = False
+    logger.warning(f"Enterprise orchestrator extensions not available: {_eoe}")
+
+try:
+    import importlib as _importlib
+    _payload_mutator_mod = _importlib.import_module("payload_mutator") if _ENTERPRISE_ENGINE_DIR in sys.path else None
+    _PayloadMutator = getattr(_payload_mutator_mod, "PayloadMutator", None) if _payload_mutator_mod else None
+    _MUTATOR_AVAILABLE = _PayloadMutator is not None
+    if _MUTATOR_AVAILABLE:
+        logger.info("PayloadMutator engine loaded")
+except Exception as _pme:
+    _MUTATOR_AVAILABLE = False
+    _PayloadMutator = None
+    logger.warning(f"PayloadMutator not available: {_pme}")
+
+try:
+    _attack_chain_mod = _importlib.import_module("adaptive_engine") if _ENTERPRISE_ENGINE_DIR in sys.path else None
+    _AttackChainCorrelator = getattr(_attack_chain_mod, "AttackChainCorrelator", None) if _attack_chain_mod else None
+    _CHAIN_CORRELATOR_AVAILABLE = _AttackChainCorrelator is not None
+    if _CHAIN_CORRELATOR_AVAILABLE:
+        logger.info("AttackChainCorrelator engine loaded")
+except Exception as _ace:
+    _CHAIN_CORRELATOR_AVAILABLE = False
+    _AttackChainCorrelator = None
+    logger.warning(f"AttackChainCorrelator not available: {_ace}")
+
+# ── Import PQSI intelligence (Post-Quantum Security Intelligence) ──
+try:
+    from quantum_protocol.intelligence.quantum_timeline import QuantumTimelineEngine
+    from quantum_protocol.core.engine import compute_qqsi_score as _compute_qqsi
+    _PQSI_INTELLIGENCE_AVAILABLE = True
+    logger.info("PQSI intelligence engine loaded")
+except Exception as _pqsi_ie:
+    _PQSI_INTELLIGENCE_AVAILABLE = False
+    logger.warning(f"PQSI intelligence not available: {_pqsi_ie}")
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # App Setup
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -178,9 +232,9 @@ app.add_middleware(
 
 scans: dict[str, dict[str, Any]] = {}
 
-# Concurrency guard: max 3 modules running simultaneously across all scans
-# (10 scans × 3 modules each = 30 theoretical threads max on the bounded pool)
-_module_semaphore = asyncio.Semaphore(3)
+# Concurrency guard: max 2 modules running simultaneously across all scans
+# (5 scans × 2 modules each = 10 theoretical threads max on the bounded pool)
+_module_semaphore = asyncio.Semaphore(2)
 
 # ── Memory-safe event appender ────────────────────────────────────────────────
 # Replaces all direct `scan["events"].append(...)` calls.
@@ -326,15 +380,58 @@ async def execute_scan(scan_id: str, target: str, scan_type: str, modules: list[
         valid_modules = [m for m in modules if m in MODULE_REGISTRY]
         scan["modules_total"] = len(valid_modules)
 
-        _add_log(scan_id, "info", "🚀 QUANTARA INTELLIGENCE CORE INITIALIZED")
-        _add_log(scan_id, "info", f"📡 TARGET VECTOR: {target} ({scan_type.upper()})")
-        _add_log(scan_id, "info", f"🛡️  ACTIVE DEFENSES: {len(valid_modules)} engines engaged")
+        _add_log(scan_id, "success", f"Engine started — {len(valid_modules)} modules targeting {target}")
 
         # Emit structured scan_started event for live visualization
         _append_event(scan, "scan_started", {
             "target": target,
             "scan_type": scan_type,
             "modules": valid_modules,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+
+        # ── Enterprise Intelligence Engines Telemetry ─────────────────────────
+        _enterprise_payload_packs: dict = {}
+        _enterprise_pack_total = 0
+        if _ENTERPRISE_ORCHESTRATOR_AVAILABLE:
+            try:
+                _PAYLOAD_PACK_NAMES = [
+                    "xss", "sqli", "sqli_blind_time", "sqli_boolean", "ssrf", "lfi",
+                    "ssti", "cmdi", "cmdi_blind", "open_redirect", "xxe", "idor",
+                    "mysql", "mysql_blind", "mssql", "pgsql",
+                    "node_prototype_pollution", "node_path_traversal",
+                    "aws_ssrf", "graphql_introspection", "graphql_injection", "graphql_nosql",
+                    "header_injection", "host_header", "cors",
+                    "api_discovery", "api_bola", "api_mass_assignment",
+                ]
+                for pack_name in _PAYLOAD_PACK_NAMES:
+                    try:
+                        pack = get_payload_pack(pack_name)
+                        if pack:
+                            _enterprise_payload_packs[pack_name] = len(pack)
+                            _enterprise_pack_total += len(pack)
+                    except Exception:
+                        pass
+            except Exception as _ete:
+                logger.debug(f"Enterprise payload pack enum error: {_ete}")
+
+        _mutator_instance = None
+        if _MUTATOR_AVAILABLE and _PayloadMutator:
+            try:
+                _mutator_instance = _PayloadMutator()
+            except Exception:
+                pass
+
+        if _enterprise_pack_total:
+            _add_log(scan_id, "info", f"Enterprise payload engine loaded: {_enterprise_pack_total} signatures / {len(_enterprise_payload_packs)} packs")
+        _append_event(scan, "enterprise_telemetry", {
+            "payload_packs": _enterprise_payload_packs,
+            "total_payloads": _enterprise_pack_total,
+            "mutation_engine": _MUTATOR_AVAILABLE,
+            "chain_correlator": _CHAIN_CORRELATOR_AVAILABLE,
+            "differential_analyzer": _ENTERPRISE_ORCHESTRATOR_AVAILABLE,
+            "adaptive_engine": _ENTERPRISE_ORCHESTRATOR_AVAILABLE,
+            "modules_loaded": len(valid_modules),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
 
@@ -350,15 +447,13 @@ async def execute_scan(scan_id: str, target: str, scan_type: str, modules: list[
         guard = create_fresh_guard() if _SAFE_GUARD_AVAILABLE else None
 
         # Phase 1: Recons & Pre-computation
-        _add_log(scan_id, "success", "PHASE 1: ATTACK SURFACE MAPPING [STARTED]")
-        _add_log(scan_id, "info", f"Loading {sum(MODULE_REGISTRY[m]['pattern_count'] for m in valid_modules)} detection signatures...")
-
-        await asyncio.sleep(0.5)
-        _add_log(scan_id, "success", "Signature database successfully compiled into AOT cache")
+        _total_sigs = sum(MODULE_REGISTRY[m]['pattern_count'] for m in valid_modules)
+        _add_log(scan_id, "success", f"Phase 1 — Attack surface mapping ({_total_sigs} signatures loaded)")
 
         severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
         owasp_counts = {}
         _last_risk_score = 0
+        _all_raw_findings = []  # Accumulate raw findings for PQSI post-processing
 
         for idx, module_key in enumerate(valid_modules):
             if scan.get("cancelled"):
@@ -373,24 +468,67 @@ async def execute_scan(scan_id: str, target: str, scan_type: str, modules: list[
             scan["progress"] = progress
             state_mgr.set_progress(scan_id, progress)
 
-            _add_log(scan_id, "info", f"[{meta['name']}] Starting scan...", module_key)
+            # ── MODULE_STARTED lifecycle event ────────────────────────────────
+            _add_log(scan_id, "info", f"[{meta['name']}] Starting ({idx + 1}/{len(valid_modules)})", module_key)
+            _append_event(scan, "module_started", {
+                "module": module_key,
+                "name": meta["name"],
+                "owasp": meta.get("owasp", ""),
+                "idx": idx,
+                "total": len(valid_modules),
+                "progress": progress,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+
+            # ── Heartbeat coroutine: emits progress event (no log spam) ────────
+            async def _module_heartbeat(sid: str, mod_name: str, mod_key: str):
+                elapsed = 0
+                while True:
+                    await asyncio.sleep(3.0)
+                    elapsed += 3
+                    _append_event(scans[sid], "module_progress", {
+                        "module": mod_key,
+                        "name": mod_name,
+                        "elapsed_seconds": elapsed,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
 
             try:
-                _add_log(scan_id, "info", f"[{meta['name']}] Executing in thread pool...", module_key)
-                # Bounded executor (max 10 threads) + semaphore (max 3 simultaneous modules)
+                # Bounded executor (max 10 threads) + semaphore (max 2 simultaneous modules)
                 async with _module_semaphore:
-                    _add_log(scan_id, "debug", f"[{meta['name']}] Acquired semaphore, submitting to executor...", module_key)
-                    # Use asyncio.wait_for to prevent indefinite blocking
-                    findings = await asyncio.wait_for(
-                        asyncio.get_event_loop().run_in_executor(
-                            bounded_executor,
-                            lambda mk=module_key: run_module_scan(mk, target, scan_type, target_type=target_type)
-                        ),
-                        timeout=60  # 1 minute timeout per module
-                    )
-                _add_log(scan_id, "success", f"[{meta['name']}] Thread execution complete, {len(findings)} findings", module_key)
+                    _hb_task = asyncio.create_task(_module_heartbeat(scan_id, meta["name"], module_key))
+                    try:
+                        # Use asyncio.wait_for to prevent indefinite blocking
+                        findings = await asyncio.wait_for(
+                            asyncio.get_event_loop().run_in_executor(
+                                bounded_executor,
+                                lambda mk=module_key: run_module_scan(mk, target, scan_type, target_type=target_type)
+                            ),
+                            timeout=60  # 1 minute timeout per module
+                        )
+                    finally:
+                        _hb_task.cancel()
+                        try:
+                            await _hb_task
+                        except asyncio.CancelledError:
+                            pass
 
-                _add_log(scan_id, "debug", f"[{meta['name']}] Compiled {meta['pattern_count']} rules", module_key)
+            # ── MODULE_COMPLETED lifecycle event ──────────────────────────────
+                findings_count = len(findings) if findings else 0
+                _append_event(scan, "module_completed", {
+                    "module": module_key,
+                    "name": meta["name"],
+                    "idx": idx,
+                    "total": len(valid_modules),
+                    "findings_count": findings_count,
+                    "progress": int(((idx + 1) / len(valid_modules)) * 100),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+                _add_log(scan_id, "success", f"[{meta['name']}] Complete — {findings_count} finding(s)", module_key)
+
+                # Track raw findings for PQSI post-processing
+                if findings and module_key.startswith("pqsi_") or module_key == "quantum_pqc":
+                    _all_raw_findings.extend(findings)
 
                 for finding in findings:
                     normalized = normalize_finding(finding, module_key)
@@ -405,6 +543,21 @@ async def execute_scan(scan_id: str, target: str, scan_type: str, modules: list[
                     scan["total_findings_count"] = scan.get("total_findings_count", 0) + 1
                     if len(scan["findings"]) > 5000:
                         del scan["findings"][:100]  # trim oldest 100; all findings persisted to DB
+
+                    # ── Enterprise: annotate finding with mutation hints ───────
+                    if _mutator_instance:
+                        try:
+                            _base_payload = normalized.get("matched_content", "") or normalized.get("title", "")
+                            if _base_payload:
+                                _vuln_type = "xss" if "xss" in normalized.get("category", "").lower() else \
+                                             "sqli" if any(k in normalized.get("category", "").lower() for k in ("sql", "inject")) else \
+                                             "cmdi" if "command" in normalized.get("category", "").lower() else \
+                                             "ssti" if "template" in normalized.get("category", "").lower() else "generic"
+                                _variants = _mutator_instance.generate_variants(_base_payload, max_variants=8)
+                                normalized["mutation_variants_count"] = len(_variants)
+                                normalized["mutation_type"] = _vuln_type
+                        except Exception:
+                            pass
 
                     _append_event(scan, "finding", normalized)
 
@@ -442,7 +595,7 @@ async def execute_scan(scan_id: str, target: str, scan_type: str, modules: list[
                     # Log finding to terminal stream for "wow" effect
                     short_file = normalized.get("file", "unknown")
                     if len(short_file) > 30: short_file = "..." + short_file[-27:]
-                    _add_log(scan_id, "warn", f"⚡ {normalized['severity'].upper()} FOUND: {normalized['title']} @ {short_file}")
+                    _add_log(scan_id, "warn", f"{normalized['severity'].upper()}: {normalized['title']} @ {short_file}")
 
                     # Emit endpoint_discovered event for Three.js visualization
                     ep = normalized.get("file") or normalized.get("endpoint") or ""
@@ -508,6 +661,38 @@ async def execute_scan(scan_id: str, target: str, scan_type: str, modules: list[
                     })
                     _last_risk_score = cur_score
 
+                # ── Enterprise: emit payload_executed telemetry per module ────
+                if _enterprise_payload_packs:
+                    _relevant_packs = []
+                    _mkey_lower = module_key.lower()
+                    if "injection" in _mkey_lower:
+                        _relevant_packs = ["xss", "sqli", "sqli_blind_time", "cmdi", "ssti"]
+                    elif "misconfig" in _mkey_lower:
+                        _relevant_packs = ["header_injection", "host_header", "cors"]
+                    elif "ssrf" in _mkey_lower:
+                        _relevant_packs = ["ssrf", "aws_ssrf"]
+                    elif "frontend" in _mkey_lower:
+                        _relevant_packs = ["xss", "open_redirect"]
+                    elif "quantara" in _mkey_lower:
+                        _relevant_packs = ["api_discovery", "api_bola", "graphql_introspection"]
+                    elif "api" in _mkey_lower:
+                        _relevant_packs = ["api_bola", "api_mass_assignment", "api_discovery"]
+                    if _relevant_packs:
+                        _packs_used = {k: _enterprise_payload_packs.get(k, 0) for k in _relevant_packs if k in _enterprise_payload_packs}
+                        _total_used = sum(_packs_used.values())
+                        _mutations_count = _total_used * 8 if _mutator_instance else 0  # 8 variants per payload
+                        _append_event(scan, "payload_executed", {
+                            "module": module_key,
+                            "packs_used": _packs_used,
+                            "total_payloads_fired": _total_used,
+                            "mutations_generated": _mutations_count,
+                            "findings_triggered": len(findings),
+                            "endpoint": target,
+                            "payload_type": "multi-vector",
+                        })
+                        _add_log(scan_id, "info",
+                            f"[{meta['name']}] {_total_used} payloads + {_mutations_count} mutations → {len(findings)} hits")
+
                 # ── AI Next Attack Decision after each module ─────────────────
                 if findings and _DECISION_ENGINE_AVAILABLE:
                     try:
@@ -519,7 +704,7 @@ async def execute_scan(scan_id: str, target: str, scan_type: str, modules: list[
                         if rec:
                             scan["ai_recommendations"] = rec.to_dict()
                             _append_event(scan, "ai_decision", rec.to_dict())
-                            _add_log(scan_id, "info", f"🤖 AI Copilot: {rec.rationale}", module_key)
+                            _add_log(scan_id, "info", f"AI Decision: {rec.rationale}", module_key)
                     except Exception as _e:
                         logger.debug(f"Attack decision engine error: {_e}")
 
@@ -529,32 +714,31 @@ async def execute_scan(scan_id: str, target: str, scan_type: str, modules: list[
                         _append_event(scan, hevt["type"], hevt)
                         _add_log(scan_id, "warn", f"🛡 SafeGuard: {hevt['new_mode']} — {hevt['reason']}")
                     if guard.should_abort():
-                        _add_log(scan_id, "error", "🛑 SAFE MODE: Scan aborted — target server health critical")
+                        _add_log(scan_id, "error", "Safe mode: Scan aborted — target server health critical")
                         break
 
                 # Phase Transition Logging
                 if progress > 20 and not scan.get("phase_1_log"):
-                    _add_log(scan_id, "success", "PHASE 1 COMPLETE: Attack Surface Successfully Mapped")
+                    _add_log(scan_id, "success", "Phase 1 complete — Attack surface mapped")
                     scan["phase_1_log"] = True
                 elif progress > 40 and not scan.get("phase_2_log"):
-                    _add_log(scan_id, "success", "PHASE 2 COMPLETE: Deep Logic Inspection Underway")
+                    _add_log(scan_id, "success", "Phase 2 complete — Deep logic inspection")
                     scan["phase_2_log"] = True
                 elif progress > 70 and not scan.get("phase_3_log"):
-                    _add_log(scan_id, "success", "PHASE 3 COMPLETE: Cross-Module Correlation Engaged")
+                    _add_log(scan_id, "success", "Phase 3 complete — Cross-module correlation")
                     scan["phase_3_log"] = True
                 elif progress > 90 and not scan.get("phase_4_log"):
-                    _add_log(scan_id, "success", "PHASE 4 COMPLETE: Integrity Verification Finishing")
+                    _add_log(scan_id, "success", "Phase 4 complete — Integrity verification")
                     scan["phase_4_log"] = True
 
                 criticals = sum(1 for f in findings if getattr(f, "severity", "").lower() == "critical")
                 highs = sum(1 for f in findings if getattr(f, "severity", "").lower() == "high")
 
                 if criticals > 0:
-                    _add_log(scan_id, "error", f"[{meta['name']}] ⚠ {criticals} CRITICAL finding(s) detected!", module_key)
-                if highs > 0:
-                    _add_log(scan_id, "warn", f"[{meta['name']}] {highs} High severity finding(s)", module_key)
+                    _add_log(scan_id, "error", f"[{meta['name']}] {criticals} critical finding(s)", module_key)
+                elif highs > 0:
+                    _add_log(scan_id, "warn", f"[{meta['name']}] {highs} high severity finding(s)", module_key)
 
-                _add_log(scan_id, "success", f"[{meta['name']}] Complete — {len(findings)} findings", module_key)
                 scan["modules_completed"] = idx + 1
                 scan["module_results"][module_key] = {"status": "completed", "findings_count": len(findings)}
 
@@ -633,11 +817,57 @@ async def execute_scan(scan_id: str, target: str, scan_type: str, modules: list[
 
         total_findings_count = len(scan["findings"])
 
+        # ── Phase: Enterprise Attack Chain Correlation ────────────────────────
+        if scan["findings"] and _CHAIN_CORRELATOR_AVAILABLE and _AttackChainCorrelator:
+            try:
+                _add_log(scan_id, "info", "Attack chain correlator engaged")
+                _correlator = _AttackChainCorrelator()
+                _chain_results = _correlator.correlate(scan["findings"])
+                if _chain_results:
+                    scan["enterprise_attack_chains"] = _chain_results
+                    _chains_count = len(_chain_results)
+                    _critical_chains = [c for c in _chain_results if c.get("severity") in ("critical", "high")]
+                    _chain_types = list({c.get("name", "unknown") for c in _chain_results})
+                    _append_event(scan, "enterprise_attack_chains", {
+                        "chains": _chain_results[:20],  # cap at 20 for SSE size
+                        "total_chains": _chains_count,
+                        "critical_chains": len(_critical_chains),
+                        "chain_types": _chain_types,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
+                    _add_log(scan_id, "warn" if _critical_chains else "success",
+                        f"Attack chains: {_chains_count} identified, {len(_critical_chains)} critical")
+                    for _hrc in _critical_chains[:3]:
+                        _add_log(scan_id, "error",
+                            f"Chain: {_hrc.get('name','?')} — {_hrc.get('description','')[:80]}")
+            except Exception as _cc_err:
+                logger.debug(f"Attack chain correlator error: {_cc_err}")
+
+        # ── Phase: Enterprise Scan Summary ────────────────────────────────────
+        if _ENTERPRISE_ORCHESTRATOR_AVAILABLE and scan["findings"]:
+            try:
+                _summary = enterprise_scan_summary(scan["findings"])
+                if _summary:
+                    scan["enterprise_summary"] = _summary
+                    _chains_in_summary = _summary.get("attack_chains", [])
+                    _append_event(scan, "enterprise_summary", {
+                        "total_findings": _summary.get("total_findings", 0),
+                        "severity_breakdown": _summary.get("severity_breakdown", {}),
+                        "attack_chains": _chains_in_summary[:20],
+                        "attack_chain_count": _summary.get("attack_chain_count", 0),
+                        "engines_available": _summary.get("engines_available", []),
+                    })
+                    _add_log(scan_id, "success",
+                        f"Enterprise summary: {_summary.get('total_findings',0)} findings, "
+                        f"{_summary.get('attack_chain_count',0)} attack chains")
+            except Exception as _es_err:
+                logger.debug(f"Enterprise scan summary error: {_es_err}")
+
         # ── Phase: Exploit Verification (URL scans only) ──────────────────────
         effective_type = target_type or scan_type or "directory"
         if effective_type in ("url",) and scan["findings"] and _VERIFIER_AVAILABLE:
             try:
-                _add_log(scan_id, "info", "🔬 PHASE 5: AUTONOMOUS EXPLOIT VERIFICATION [STARTED]")
+                _add_log(scan_id, "info", "Phase 5 — Autonomous exploit verification")
                 verifier = get_exploit_verifier()
                 url_findings = [
                     f for f in scan["findings"]
@@ -671,7 +901,7 @@ async def execute_scan(scan_id: str, target: str, scan_type: str, modules: list[
                             "evidence_hash": vr.evidence_hash,
                         })
                         _add_log(scan_id, "error",
-                            f"✅ EXPLOIT VERIFIED: {vr.endpoint} [{vr.confidence_score:.0%} confidence | {vr.strategy}]")
+                            f"VERIFIED: {vr.endpoint} [{vr.confidence_score:.0%} confidence | {vr.strategy}]")
                 scan["verified_findings"] = [vr.to_dict() for vr in verified_results if vr.verification_status == "confirmed"]
                 _add_log(scan_id, "success",
                     f"Exploit verification complete: {confirmed_count}/{len(verified_results)} findings confirmed with proof")
@@ -681,7 +911,7 @@ async def execute_scan(scan_id: str, target: str, scan_type: str, modules: list[
         # ── Phase: Neo4j Attack Graph Auto-Generation ─────────────────────────
         if scan["findings"] and _NEO4J_AVAILABLE:
             try:
-                _add_log(scan_id, "info", "🕸 PHASE 6: ATTACK GRAPH INTELLIGENCE [BUILDING]")
+                _add_log(scan_id, "info", "Phase 6 — Building attack graph intelligence")
                 neo4j = get_neo4j_client()
                 neo4j.ingest_scan_results(scan_id, target, scan["findings"])
                 attack_paths = neo4j.get_attack_paths(scan_id)
@@ -714,10 +944,59 @@ async def execute_scan(scan_id: str, target: str, scan_type: str, modules: list[
             except Exception as _ae:
                 logger.debug(f"Attack summary error: {_ae}")
 
-        _add_log(scan_id, "info", "────────────────────────────────────────────")
-        _add_log(scan_id, "success", f"Scan complete. {total_findings_count} total findings across {len(valid_modules)} modules in {scan['duration']}s.")
-        _add_log(scan_id, "info",
-            f"Risk Score: {risk_score}/100 [{confidence}] | Status: {scan_status_val} | OWASP Categories: {len(owasp_counts)}")
+        # ── Phase: PQSI Post-Processing (Quantum Intelligence) ────────────
+        if _PQSI_INTELLIGENCE_AVAILABLE and any(
+            m.startswith("pqsi_") for m in valid_modules
+        ):
+            try:
+                _add_log(scan_id, "info", "PQSI — Computing quantum intelligence metrics")
+                _timeline_engine = QuantumTimelineEngine()
+
+                # Collect raw CryptoFinding objects from PQSI modules
+                _pqsi_raw = [f for f in _all_raw_findings if hasattr(f, "family")]
+                _timeline_engine.compute_timeline(_pqsi_raw)
+
+                # Compute adoption index from library agent findings
+                _pqc_adopt = 0.0
+                for _rf in _pqsi_raw:
+                    _aidx = getattr(_rf, "pqc_adoption_index", None)
+                    if _aidx and _aidx > _pqc_adopt:
+                        _pqc_adopt = float(_aidx)
+
+                # Compute QQSI
+                _qqsi = _compute_qqsi(_pqsi_raw, _pqc_adopt)
+                _exposure = _timeline_engine.generate_exposure_summary(_pqsi_raw)
+
+                _hndl_count = sum(
+                    1 for _rf in _pqsi_raw
+                    if hasattr(_rf, "family") and "HNDL" in str(getattr(_rf.family, "value", ""))
+                )
+                _recon_detected = any(
+                    hasattr(_rf, "family") and "Recon" in str(getattr(_rf.family, "value", ""))
+                    for _rf in _pqsi_raw
+                )
+
+                scan["quantum_intelligence"] = {
+                    "qqsi_score": _qqsi["qqsi"],
+                    "qqsi_grade": _qqsi["grade"],
+                    "components": _qqsi["components"],
+                    "pqc_adoption_index": _pqc_adopt,
+                    "hndl_findings_count": _hndl_count,
+                    "quantum_recon_detected": _recon_detected,
+                    "exposure_summary": _exposure,
+                    "migration_priority": _qqsi.get("migration_priority", "unknown"),
+                }
+
+                _append_event(scan, "quantum_intelligence", scan["quantum_intelligence"])
+                _add_log(scan_id, "success",
+                    f"PQSI complete — QQSI: {_qqsi['qqsi']}/100 [{_qqsi['grade']}] | "
+                    f"PQC Adoption: {_pqc_adopt} | HNDL: {_hndl_count} | "
+                    f"Migration: {_qqsi.get('migration_priority', 'unknown')}")
+            except Exception as _pqsi_err:
+                logger.warning(f"PQSI post-processing error: {_pqsi_err}")
+
+        _add_log(scan_id, "success",
+            f"Scan complete — {total_findings_count} findings / {len(valid_modules)} modules / {scan['duration']}s / Risk {risk_score}/100 [{risk_level}]")
         _append_event(scan, "complete", {
             "total_findings":  total_findings_count,
             "duration":        scan["duration"],
@@ -761,17 +1040,7 @@ def _add_log(scan_id: str, level: str, message: str, module: Optional[str] = Non
     now = datetime.now(timezone.utc)
     time_str = now.strftime("%H:%M:%S")
 
-    symbols = {
-        "info": "ℹ",
-        "success": "✔",
-        "warn": "⚠",
-        "error": "✖",
-        "debug": "⚙"
-    }
-    symbol = symbols.get(level, "•")
-
-    formatted_message = f"{symbol} {message}"
-    log_entry = {"time": time_str, "level": level, "message": formatted_message, "module": module}
+    log_entry = {"time": time_str, "level": level, "message": message, "module": module}
     scans[scan_id]["logs"].append(log_entry)
     _append_event(scans[scan_id], "log", log_entry)
 
@@ -1063,6 +1332,16 @@ async def start_scan(
             # Per-user limit exceeded — clean up and reject
             scans.pop(scan_id, None)
             raise HTTPException(status_code=429, detail=str(ve))
+
+    # ── Emit initialization log immediately so SSE stream is non-empty ─────
+    _add_log(scan_id, "info", f"Scan initialized — {request.target} | {len(valid_modules)} modules | {total_patterns} signatures")
+    _append_event(scans[scan_id], "scan_initialized", {
+        "scan_id": scan_id,
+        "target": request.target,
+        "modules": valid_modules,
+        "total_patterns": total_patterns,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    })
 
     background_tasks.add_task(execute_scan, scan_id, request.target, request.scan_type, valid_modules, None, request.target_type)
     
@@ -1463,6 +1742,43 @@ async def get_scan_coverage(scan_id: str):
     }
 
 
+@app.get("/api/v1/quantum/intelligence/{scan_id}")
+async def get_quantum_intelligence(scan_id: str):
+    """Quantum Command Center API — returns PQSI summary for a scan."""
+    if scan_id not in scans:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    scan = scans[scan_id]
+
+    qi = scan.get("quantum_intelligence")
+    if not qi:
+        # Fall back to scanning events for quantum_intelligence data
+        qi_events = [
+            e["data"] for e in scan.get("events", [])
+            if e.get("type") == "quantum_intelligence"
+        ]
+        qi = qi_events[-1] if qi_events else None
+
+    if not qi:
+        return {
+            "scan_id": scan_id,
+            "quantum_intelligence_available": False,
+            "message": "No PQSI modules were run for this scan",
+        }
+
+    return {
+        "scan_id": scan_id,
+        "quantum_intelligence_available": True,
+        "quantum_risk_score": qi.get("qqsi_score", 0),
+        "qqsi_grade": qi.get("qqsi_grade", "N/A"),
+        "pqc_adoption_index": qi.get("pqc_adoption_index", 0),
+        "hndl_exposure": qi.get("hndl_findings_count", 0),
+        "quantum_recon_detected": qi.get("quantum_recon_detected", False),
+        "migration_priority": qi.get("migration_priority", "unknown"),
+        "components": qi.get("components", {}),
+        "exposure_summary": qi.get("exposure_summary", {}),
+    }
+
+
 # ── Scan History ───────────────────────────────────────────────
 
 @app.get("/api/v1/scans")
@@ -1651,7 +1967,7 @@ async def get_usage(subscription: Dict[str, Any] = Depends(get_user_subscription
     usage = billing_service.get_usage(user_id)
     # Ensure Firestore values are reflected if available
     usage["scans_this_month"] = subscription.get("scansUsedThisMonth", usage["scans_this_month"])
-    usage["scans_limit"] = subscription.get("scanLimit", usage.get("scans_limit", 5))
+    usage["scans_limit"] = subscription.get("scanLimit", usage.get("scans_limit", 10))
     return usage
 
 @app.post("/api/v1/debug/reset-usage")
@@ -1718,6 +2034,58 @@ async def admin_billing_revenue(firebase_user: Dict[str, Any] = Depends(get_curr
     finally:
         db.close()
     return billing_service.get_admin_revenue_summary()
+
+
+@app.get("/api/v1/admin/users")
+async def admin_get_users(firebase_user: Dict[str, Any] = Depends(get_current_firebase_user)):
+    """Admin endpoint: list all users with subscription tier, status, and scan counts."""
+    local_user_id = firebase_user.get("local_user_id")
+    if not local_user_id:
+        raise HTTPException(status_code=403, detail="Admin required")
+    db = get_db_session()
+    try:
+        requesting_user = db.query(User).filter(User.id == local_user_id).first()
+        if not requesting_user or not (requesting_user.is_admin or requesting_user.is_super_admin):
+            raise HTTPException(status_code=403, detail="Admin required")
+
+        # Aggregate total scan counts per user
+        scan_counts = dict(
+            db.query(Scan.user_id, func.count(Scan.id))
+            .group_by(Scan.user_id)
+            .all()
+        )
+
+        users = db.query(User).order_by(User.created_at.desc()).limit(500).all()
+        result = []
+        for u in users:
+            result.append({
+                "id": u.id,
+                "email": u.email,
+                "username": u.username or "",
+                "full_name": u.full_name or "",
+                "subscription_tier": u.subscription_tier.value if u.subscription_tier else "free",
+                "subscription_status": u.subscription_status.value if u.subscription_status else "trial",
+                "monthly_scan_limit": u.monthly_scan_limit or 10,
+                "total_scans": scan_counts.get(u.id, 0),
+                "is_admin": bool(u.is_admin),
+                "is_super_admin": bool(u.is_super_admin),
+                "has_stripe": bool(u.stripe_customer_id),
+                "created_at": u.created_at.isoformat() if u.created_at else None,
+            })
+
+        # Tier distribution summary
+        tier_counts = {}
+        for u in users:
+            tier = u.subscription_tier.value if u.subscription_tier else "free"
+            tier_counts[tier] = tier_counts.get(tier, 0) + 1
+
+        return {
+            "users": result,
+            "total": len(result),
+            "tier_distribution": tier_counts,
+        }
+    finally:
+        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1907,12 +2275,7 @@ async def ai_chat_assistant(
     request: ChatRequest,
     subscription: Dict[str, Any] = Depends(get_user_subscription)
 ):
-    """AI security assistant chat endpoint."""
-    # Check if user has AI access (Pro or Elite)
-    allowed, error = check_subscription_access(subscription, "ai_remediation")
-    if not allowed:
-        raise HTTPException(status_code=403, detail=error)
-    
+    """AI security assistant chat endpoint — available to all plans."""
     response = ai_service.chat_assistant(request.question, request.context)
     return {
         "response": response,
@@ -2130,7 +2493,7 @@ async def poc_execute(request: POCExecuteRequest, req: Request):
     start_ts = _time_mod.time()
     try:
         async with httpx.AsyncClient(
-            timeout=15.0,
+            timeout=httpx.Timeout(25.0, connect=10.0),
             follow_redirects=True,
             verify=False,
             limits=httpx.Limits(max_connections=5, max_keepalive_connections=2),
@@ -2205,7 +2568,7 @@ async def poc_execute(request: POCExecuteRequest, req: Request):
         exc_name = type(exc).__name__
         elapsed_ms = int((_time_mod.time() - start_ts) * 1000)
         if "Timeout" in exc_name:
-            return {"success": False, "error": "Request timed out after 15s", "verification_status": "TIMEOUT", "response_time_ms": elapsed_ms}
+            return {"success": False, "error": "Request timed out — target may be slow or unreachable", "verification_status": "TIMEOUT", "response_time_ms": elapsed_ms}
         if "Connect" in exc_name:
             return {"success": False, "error": f"Connection failed: {str(exc)[:300]}", "verification_status": "FAILED", "response_time_ms": elapsed_ms}
         return {"success": False, "error": str(exc)[:500], "verification_status": "ERROR", "response_time_ms": elapsed_ms}

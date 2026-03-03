@@ -1333,3 +1333,127 @@ def scan_url_with_quantara(
     except Exception as e:
         logger.error(f"scan_url_with_quantara failed for {url}: {e}")
         return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Enterprise Integration Layer — added by enterprise refactor
+# Wires Quantara scanner into the enterprise mutation + context detection pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+import time as _qs_time
+import logging as _qs_logging
+
+_qs_logger = _qs_logging.getLogger("enterprise.scanner.quantara")
+
+
+def _load_enterprise_mutator():
+    """
+    Resolve the enterprise mutation engine using importlib so that
+    Pylance doesn't flag a static unresolvable import.
+    Falls back to None if the engine is not on sys.path.
+    """
+    import importlib
+    import sys
+    import os
+
+    _engine_dir = os.path.normpath(
+        os.path.join(os.path.dirname(__file__), "..", "scanner_engine")
+    )
+    if _engine_dir not in sys.path:
+        sys.path.insert(0, _engine_dir)
+
+    try:
+        mod = importlib.import_module("payload_mutator")
+        return getattr(mod, "generate_variants", None)
+    except ImportError:
+        return None
+
+
+def _load_enterprise_context_detector():
+    """Resolve the context detector using importlib."""
+    import importlib
+    try:
+        mod = importlib.import_module("payload_context_detector")
+        return getattr(mod, "detect_context", None)
+    except ImportError:
+        return None
+
+
+def scan_url_enterprise(
+    url: str,
+    module_key: str | None = None,
+    log_callback=None,
+    timeout: float = 12.0,
+    scan_id: str = "",
+    on_finding=None,
+) -> tuple[list[dict], dict]:
+    """
+    Enterprise wrapper for scan_url_with_quantara().
+
+    Adds:
+    - Structured telemetry (duration, findings count, severity breakdown)
+    - Optional real-time finding callback for SSE streaming
+    - Payload mutation hints attached to each finding
+    - Injection context detection availability flag in telemetry
+
+    Returns:
+        (findings_list, telemetry_dict)
+    """
+    start = _qs_time.time()
+
+    # Load enterprise engines via importlib (avoids static import errors)
+    _mutator = _load_enterprise_mutator()
+    _context_detector = _load_enterprise_context_detector()
+
+    findings = scan_url_with_quantara(
+        url=url,
+        module_key=module_key,
+        log_callback=log_callback,
+        timeout=timeout,
+    )
+
+    # Enrich each finding with enterprise metadata
+    enriched = []
+    for f in findings:
+        finding_dict = f if isinstance(f, dict) else (f.__dict__ if hasattr(f, "__dict__") else {})
+        # Attach enterprise metadata
+        finding_dict["scan_id"] = scan_id
+        finding_dict["enterprise_enriched"] = True
+        # Variant count hint (how many payloads were in the mutation pool)
+        payload = finding_dict.get("payload_used", finding_dict.get("matched_content", ""))
+        if _mutator and payload:
+            try:
+                variants = _mutator(payload)
+                finding_dict["mutation_variants_available"] = len(variants)
+            except Exception:
+                pass
+        enriched.append(finding_dict)
+        if on_finding:
+            try:
+                on_finding(finding_dict)
+            except Exception:
+                pass
+
+    elapsed = _qs_time.time() - start
+    telemetry = {
+        "scanner": "quantara_http",
+        "scan_id": scan_id,
+        "url": url,
+        "module": module_key or "all",
+        "findings_count": len(enriched),
+        "duration_ms": round(elapsed * 1000, 2),
+        "timestamp": _qs_time.time(),
+        "payload_mutation_available": _mutator is not None,
+        "context_detection_available": _context_detector is not None,
+        "severity_breakdown": {
+            sev: sum(
+                1 for f in enriched
+                if (f.get("severity") or "").lower() == sev
+            )
+            for sev in ["critical", "high", "medium", "low", "info"]
+        },
+    }
+    _qs_logger.info(
+        f"quantara_enterprise: {len(enriched)} findings for {url} "
+        f"in {telemetry['duration_ms']:.0f}ms"
+    )
+    return enriched, telemetry

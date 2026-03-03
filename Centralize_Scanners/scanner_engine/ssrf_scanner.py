@@ -300,3 +300,158 @@ def scan_ssrf_directory(
             continue
 
     return all_findings
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Enterprise Integration Layer — added by enterprise refactor
+# Adds: telemetry, NormalizedFinding export, behavioral probe stubs
+# ─────────────────────────────────────────────────────────────────────────────
+import time as _ssrf_time
+import logging as _ssrf_logging
+
+_ssrf_logger = _ssrf_logging.getLogger("enterprise.scanner.ssrf")
+
+
+def normalize_ssrf_finding(f: SSRFFinding, scan_id: str = "") -> dict:
+    """Convert SSRFFinding to NormalizedFinding-compatible dict."""
+    return {
+        "id": f.id,
+        "scanner_source": "ssrf",
+        "module": "ssrf",
+        "category": f.category,
+        "severity": f.severity.lower(),
+        "title": f.title,
+        "description": f.description,
+        "matched_content": f.matched_content,
+        "cwe": f.cwe,
+        "owasp": "A10:2025",
+        "file": f.file,
+        "line_number": f.line_number,
+        "confidence": f.confidence,
+        "remediation": f.remediation,
+        "tags": list(f.tags) + ["ssrf", "server-side-request-forgery"],
+        "scan_id": scan_id,
+    }
+
+
+def scan_ssrf_file_telemetry(
+    content: str,
+    filepath: str,
+    base_path: str = "",
+    scan_id: str = "",
+) -> tuple[list[SSRFFinding], dict]:
+    """Wraps scan_ssrf_file() with structured telemetry."""
+    start = _ssrf_time.monotonic()
+    findings = scan_ssrf_file(content, filepath, base_path)
+    elapsed_ms = (_ssrf_time.monotonic() - start) * 1000
+    return findings, {
+        "scanner": "ssrf",
+        "scan_id": scan_id,
+        "file": filepath,
+        "findings_count": len(findings),
+        "duration_ms": round(elapsed_ms, 2),
+        "timestamp": _ssrf_time.time(),
+    }
+
+
+def scan_ssrf_directory_enterprise(
+    root: str,
+    max_files: int = 50_000,
+    scan_id: str = "",
+    on_finding=None,
+) -> tuple[list[SSRFFinding], dict]:
+    """
+    Enterprise wrapper for scan_ssrf_directory().
+    Adds structured telemetry + optional real-time finding callback.
+    """
+    from pathlib import Path as _Path
+    start = _ssrf_time.time()
+    findings, files_scanned = [], 0
+
+    for fpath in _Path(root).rglob("*"):
+        if files_scanned >= max_files:
+            break
+        if fpath.is_dir() or any(skip in fpath.parts for skip in SKIP_DIRS):
+            continue
+        if fpath.suffix.lower() not in SCAN_EXTENSIONS:
+            continue
+        try:
+            content = fpath.read_text(encoding="utf-8", errors="ignore")
+            if len(content) > 5_000_000:
+                continue
+            file_findings, _ = scan_ssrf_file_telemetry(
+                content, str(fpath), root, scan_id=scan_id
+            )
+            for f in file_findings:
+                findings.append(f)
+                if on_finding:
+                    try:
+                        on_finding(normalize_ssrf_finding(f, scan_id))
+                    except Exception:
+                        pass
+            files_scanned += 1
+        except (OSError, PermissionError):
+            continue
+
+    telemetry = {
+        "scanner": "ssrf",
+        "scan_id": scan_id,
+        "root": root,
+        "files_scanned": files_scanned,
+        "findings_count": len(findings),
+        "duration_ms": round((_ssrf_time.time() - start) * 1000, 2),
+        "severity_breakdown": {
+            sev: sum(1 for f in findings if f.severity.lower() == sev)
+            for sev in ["critical", "high", "medium", "low", "info"]
+        },
+    }
+    _ssrf_logger.info(
+        f"ssrf_scanner: {len(findings)} findings across {files_scanned} files "
+        f"in {telemetry['duration_ms']:.0f}ms"
+    )
+    return findings, telemetry
+
+
+async def probe_ssrf_behavioral(
+    fetch_fn,
+    url: str,
+    parameter: str,
+    test_url: str = "http://169.254.169.254/latest/meta-data/",
+    baseline_ms: float = 0.0,
+) -> dict:
+    """
+    Behavioral SSRF probe for live HTTP scanning.
+    Compares response content against known cloud metadata indicators.
+    Integrates with BehaviorAnalyzer for timing + content evidence.
+    """
+    import asyncio as _asyncio
+    try:
+        import time as _t
+        start = _t.monotonic()
+        resp = await _asyncio.wait_for(
+            fetch_fn(url, params={parameter: test_url}),
+            timeout=10.0,
+        )
+        elapsed = (_t.monotonic() - start) * 1000
+        body = getattr(resp, "text", "") or ""
+        cloud_indicators = [
+            "ami-id", "instance-id", "security-credentials",
+            "computeMetadata", "instanceMetadata", "subscriptionId",
+        ]
+        metadata_leaked = any(ind in body for ind in cloud_indicators)
+        return {
+            "vulnerable": metadata_leaked,
+            "confidence": 0.95 if metadata_leaked else 0.0,
+            "timing_ms": elapsed,
+            "baseline_ms": baseline_ms,
+            "test_url": test_url,
+            "parameter": parameter,
+            "evidence": body[:500] if metadata_leaked else "",
+        }
+    except Exception as exc:
+        return {
+            "vulnerable": False,
+            "confidence": 0.0,
+            "error": str(exc),
+            "parameter": parameter,
+        }

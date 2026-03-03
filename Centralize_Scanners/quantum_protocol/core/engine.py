@@ -796,6 +796,101 @@ def compute_vuln_risk_score(findings: list[CryptoFinding]) -> float:
     return min(100.0, round(total, 1))
 
 
+def compute_qqsi_score(
+    findings: list[CryptoFinding],
+    pqc_adoption_index: float = 0.0,
+) -> dict:
+    """
+    Compute the Quantara Quantum Security Index (QQSI) — 0-100.
+
+    Components (weighted):
+      - Quantum Exposure Score  (25%) — inverted quantum_risk (higher = safer)
+      - PQC Adoption Score      (25%) — from Agent 3 adoption index
+      - Crypto Agility Score    (20%) — existing agility metric
+      - HNDL Risk Score         (15%) — inverted HNDL severity (higher = safer)
+      - Quantum Recon Risk      (15%) — inverted recon severity (higher = safer)
+
+    Returns dict with: qqsi, grade, components, migration_priority
+    """
+    # 1. Quantum Exposure — inverted risk (100 - risk = safety)
+    quantum_risk = compute_quantum_risk_score(findings)
+    exposure_safety = max(0.0, 100.0 - quantum_risk)
+
+    # 2. PQC Adoption
+    adoption = max(0.0, min(100.0, pqc_adoption_index))
+
+    # 3. Crypto Agility
+    agility = compute_agility_score(findings)
+
+    # 4. HNDL Risk — weighted sum of HNDL findings severity
+    hndl_weights = {RiskLevel.CRITICAL: 20.0, RiskLevel.HIGH: 12.0,
+                    RiskLevel.MEDIUM: 5.0, RiskLevel.LOW: 1.0, RiskLevel.INFO: 0.0}
+    hndl_total = sum(
+        hndl_weights.get(f.risk, 0) * f.confidence
+        for f in findings
+        if f.family in (AlgoFamily.HNDL_HARVEST, AlgoFamily.HNDL_STORAGE)
+    )
+    hndl_risk = min(100.0, hndl_total)
+    hndl_safety = max(0.0, 100.0 - hndl_risk)
+
+    # 5. Quantum Recon Risk
+    recon_weights = {RiskLevel.CRITICAL: 25.0, RiskLevel.HIGH: 15.0,
+                     RiskLevel.MEDIUM: 6.0, RiskLevel.LOW: 2.0, RiskLevel.INFO: 0.0}
+    recon_total = sum(
+        recon_weights.get(f.risk, 0) * f.confidence
+        for f in findings
+        if f.family in (AlgoFamily.QUANTUM_RECON, AlgoFamily.CRYPTO_ENUMERATION)
+    )
+    recon_risk = min(100.0, recon_total)
+    recon_safety = max(0.0, 100.0 - recon_risk)
+
+    # Weighted QQSI
+    qqsi = round(
+        exposure_safety * 0.25
+        + adoption * 0.25
+        + agility * 0.20
+        + hndl_safety * 0.15
+        + recon_safety * 0.15,
+        1,
+    )
+    qqsi = max(0.0, min(100.0, qqsi))
+
+    # Grade
+    if qqsi >= 90:
+        grade = "A"
+    elif qqsi >= 75:
+        grade = "B"
+    elif qqsi >= 60:
+        grade = "C"
+    elif qqsi >= 40:
+        grade = "D"
+    else:
+        grade = "F"
+
+    # Migration priority
+    if qqsi < 30:
+        migration_priority = "CRITICAL"
+    elif qqsi < 50:
+        migration_priority = "HIGH"
+    elif qqsi < 70:
+        migration_priority = "MEDIUM"
+    else:
+        migration_priority = "LOW"
+
+    return {
+        "qqsi": qqsi,
+        "grade": grade,
+        "migration_priority": migration_priority,
+        "components": {
+            "quantum_exposure_score": round(exposure_safety, 1),
+            "pqc_adoption_score": round(adoption, 1),
+            "crypto_agility_score": round(agility, 1),
+            "hndl_risk_score": round(hndl_risk, 1),
+            "quantum_recon_risk": round(recon_risk, 1),
+        },
+    }
+
+
 def build_owasp_coverage(findings: list[CryptoFinding]) -> dict[str, int]:
     """Count findings per OWASP Top 10:2025 category."""
     from quantum_protocol.models.enums import OwaspCategory, COMPLIANCE_VIOLATIONS

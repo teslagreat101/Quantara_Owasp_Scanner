@@ -182,7 +182,7 @@ async def get_user_subscription(
             "uid": uid,
             "email": email,
             "plan": "free",
-            "scanLimit": 5,
+            "scanLimit": 10,
             "scansUsedThisMonth": 0,
             "subscriptionStatus": "active",
             "billingCycleEnd": datetime.now(timezone.utc) + timedelta(days=30),
@@ -277,7 +277,7 @@ def check_usage_limits(subscription: Dict[str, Any]) -> Tuple[bool, Optional[str
         return True, None
 
     used = subscription.get("scansUsedThisMonth", 0)
-    limit = subscription.get("scanLimit", 5)
+    limit = subscription.get("scanLimit", 10)
 
     if used >= limit:
         return False, f"You have reached your monthly scan limit ({limit}). Please upgrade your plan."

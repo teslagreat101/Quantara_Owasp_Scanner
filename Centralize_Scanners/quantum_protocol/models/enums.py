@@ -67,6 +67,17 @@ class AlgoFamily(str, Enum):
     CERT_ISSUE = "Certificate-Issue"; PROTOCOL = "Protocol-Issue"; AGILITY = "Crypto-Agility"
     # PQC
     ML_KEM = "ML-KEM"; ML_DSA = "ML-DSA"; SLH_DSA = "SLH-DSA"; XMSS = "XMSS"
+    # PQSI — PQC detection signals
+    PQC_KYBER = "PQC-Kyber-Detected"; PQC_DILITHIUM = "PQC-Dilithium-Detected"
+    PQC_FALCON = "PQC-Falcon-Detected"; PQC_SPHINCS = "PQC-SPHINCS+-Detected"
+    PQC_BIKE = "PQC-BIKE-Detected"; PQC_MCELIECE = "PQC-McEliece-Detected"
+    PQC_HYBRID = "PQC-Hybrid-Deployed"
+    # PQSI — HNDL activity
+    HNDL_HARVEST = "HNDL-Harvest-Activity"; HNDL_STORAGE = "HNDL-Storage-Activity"
+    # PQSI — Quantum recon
+    QUANTUM_RECON = "Quantum-Recon-Activity"; CRYPTO_ENUMERATION = "Crypto-Enumeration-Engine"
+    # PQSI — Adoption signals
+    PQC_ADOPTION = "PQC-Adoption-Signal"; CRYPTO_AGILITY_SIGNAL = "Crypto-Agility-Signal"
     # Secrets
     SECRET_AWS = "AWS-Credential"; SECRET_GCP = "GCP-Credential"; SECRET_AZURE = "Azure-Credential"
     SECRET_DIGITALOCEAN = "DigitalOcean-Credential"; SECRET_ALIBABA = "Alibaba-Cloud-Credential"
@@ -204,9 +215,13 @@ class AlgoFamily(str, Enum):
 
 _QB = {AlgoFamily.RSA, AlgoFamily.RSA_OAEP, AlgoFamily.ECC, AlgoFamily.ECDSA, AlgoFamily.ECDH, AlgoFamily.DSA, AlgoFamily.DH, AlgoFamily.ELGAMAL, AlgoFamily.X25519, AlgoFamily.ED25519, AlgoFamily.ED448, AlgoFamily.X448}
 _CB = {AlgoFamily.MD4, AlgoFamily.MD5, AlgoFamily.SHA1, AlgoFamily.DES, AlgoFamily.RC4, AlgoFamily.RC2, AlgoFamily.BLOWFISH, AlgoFamily.IDEA, AlgoFamily.RIPEMD160, AlgoFamily.HMAC_MD5, AlgoFamily.HMAC_SHA1, AlgoFamily.AES_ECB, AlgoFamily.TRIPLE_DES, AlgoFamily.WEAK_RANDOM}
-_PQ = {AlgoFamily.ML_KEM, AlgoFamily.ML_DSA, AlgoFamily.SLH_DSA, AlgoFamily.XMSS}
+_PQ = {AlgoFamily.ML_KEM, AlgoFamily.ML_DSA, AlgoFamily.SLH_DSA, AlgoFamily.XMSS, AlgoFamily.PQC_KYBER, AlgoFamily.PQC_DILITHIUM, AlgoFamily.PQC_FALCON, AlgoFamily.PQC_SPHINCS, AlgoFamily.PQC_BIKE, AlgoFamily.PQC_MCELIECE, AlgoFamily.PQC_HYBRID}
 _SY = {AlgoFamily.AES_128, AlgoFamily.AES_ECB, AlgoFamily.DES, AlgoFamily.TRIPLE_DES, AlgoFamily.RC4, AlgoFamily.RC2, AlgoFamily.BLOWFISH, AlgoFamily.IDEA}
-_VC: dict[AlgoFamily, VulnCategory] = {}
+_VC: dict[AlgoFamily, VulnCategory] = {
+    AlgoFamily.HNDL_HARVEST: VulnCategory.CRYPTO, AlgoFamily.HNDL_STORAGE: VulnCategory.CRYPTO,
+    AlgoFamily.QUANTUM_RECON: VulnCategory.RECON, AlgoFamily.CRYPTO_ENUMERATION: VulnCategory.RECON,
+    AlgoFamily.PQC_ADOPTION: VulnCategory.CRYPTO, AlgoFamily.CRYPTO_AGILITY_SIGNAL: VulnCategory.CRYPTO,
+}
 for _f, _c in [(AlgoFamily.VULN_IDOR,VulnCategory.ACCESS_CONTROL),(AlgoFamily.VULN_PATH_TRAVERSAL,VulnCategory.ACCESS_CONTROL),(AlgoFamily.VULN_CORS_MISCONFIG,VulnCategory.ACCESS_CONTROL),(AlgoFamily.VULN_SSRF,VulnCategory.ACCESS_CONTROL),(AlgoFamily.VULN_PRIVILEGE_ESCALATION,VulnCategory.ACCESS_CONTROL),(AlgoFamily.VULN_MISSING_AUTH_MIDDLEWARE,VulnCategory.ACCESS_CONTROL),(AlgoFamily.VULN_OPEN_REDIRECT,VulnCategory.ACCESS_CONTROL),(AlgoFamily.VULN_FILE_UPLOAD,VulnCategory.ACCESS_CONTROL),(AlgoFamily.VULN_DEBUG_ENABLED,VulnCategory.MISCONFIG),(AlgoFamily.VULN_DEFAULT_CREDS,VulnCategory.MISCONFIG),(AlgoFamily.VULN_MISSING_HEADERS,VulnCategory.MISCONFIG),(AlgoFamily.VULN_EXPOSED_ADMIN,VulnCategory.MISCONFIG),(AlgoFamily.VULN_DIRECTORY_LISTING,VulnCategory.MISCONFIG),(AlgoFamily.VULN_VERBOSE_ERRORS,VulnCategory.MISCONFIG),(AlgoFamily.VULN_EXPOSED_DOCS,VulnCategory.MISCONFIG),(AlgoFamily.VULN_PERMISSIVE_POLICY,VulnCategory.MISCONFIG),(AlgoFamily.VULN_UNPINNED_DEP,VulnCategory.SUPPLY_CHAIN),(AlgoFamily.VULN_KNOWN_VULN_DEP,VulnCategory.SUPPLY_CHAIN),(AlgoFamily.VULN_MISSING_LOCKFILE,VulnCategory.SUPPLY_CHAIN),(AlgoFamily.VULN_TYPOSQUAT,VulnCategory.SUPPLY_CHAIN),(AlgoFamily.VULN_POSTINSTALL_SCRIPT,VulnCategory.SUPPLY_CHAIN),(AlgoFamily.VULN_BUILD_LEAK,VulnCategory.SUPPLY_CHAIN),(AlgoFamily.VULN_SQL_INJECTION,VulnCategory.INJECTION),(AlgoFamily.VULN_XSS,VulnCategory.INJECTION),(AlgoFamily.VULN_COMMAND_INJECTION,VulnCategory.INJECTION),(AlgoFamily.VULN_TEMPLATE_INJECTION,VulnCategory.INJECTION),(AlgoFamily.VULN_NOSQL_INJECTION,VulnCategory.INJECTION),(AlgoFamily.VULN_LDAP_INJECTION,VulnCategory.INJECTION),(AlgoFamily.VULN_XPATH_INJECTION,VulnCategory.INJECTION),(AlgoFamily.VULN_XXE,VulnCategory.INJECTION),(AlgoFamily.VULN_DOM_XSS,VulnCategory.INJECTION),(AlgoFamily.VULN_HEADER_INJECTION,VulnCategory.INJECTION),(AlgoFamily.VULN_CRLF_INJECTION,VulnCategory.INJECTION),(AlgoFamily.VULN_MISSING_RATE_LIMIT,VulnCategory.INSECURE_DESIGN),(AlgoFamily.VULN_CSRF,VulnCategory.INSECURE_DESIGN),(AlgoFamily.VULN_MASS_ASSIGNMENT,VulnCategory.INSECURE_DESIGN),(AlgoFamily.VULN_BUSINESS_LOGIC,VulnCategory.INSECURE_DESIGN),(AlgoFamily.VULN_MISSING_CAPTCHA,VulnCategory.INSECURE_DESIGN),(AlgoFamily.VULN_WEAK_PASSWORD_POLICY,VulnCategory.AUTH),(AlgoFamily.VULN_WEAK_HASH_PASSWORD,VulnCategory.AUTH),(AlgoFamily.VULN_JWT_MISCONFIG,VulnCategory.AUTH),(AlgoFamily.VULN_SESSION_FIXATION,VulnCategory.AUTH),(AlgoFamily.VULN_MISSING_MFA,VulnCategory.AUTH),(AlgoFamily.VULN_INSECURE_COOKIE,VulnCategory.AUTH),(AlgoFamily.VULN_HARDCODED_CREDS,VulnCategory.AUTH),(AlgoFamily.VULN_UNSAFE_DESER,VulnCategory.INTEGRITY),(AlgoFamily.VULN_MISSING_SRI,VulnCategory.INTEGRITY),(AlgoFamily.VULN_UNVERIFIED_CICD,VulnCategory.INTEGRITY),(AlgoFamily.VULN_UNSIGNED_UPDATE,VulnCategory.INTEGRITY),(AlgoFamily.VULN_MISSING_AUDIT_LOG,VulnCategory.LOGGING),(AlgoFamily.VULN_PII_IN_LOGS,VulnCategory.LOGGING),(AlgoFamily.VULN_SENSITIVE_LOG,VulnCategory.LOGGING),(AlgoFamily.VULN_FAIL_OPEN,VulnCategory.EXCEPTION),(AlgoFamily.VULN_SWALLOWED_ERROR,VulnCategory.EXCEPTION),(AlgoFamily.VULN_RESOURCE_LEAK,VulnCategory.EXCEPTION),(AlgoFamily.VULN_NULL_DEREF,VulnCategory.EXCEPTION),(AlgoFamily.VULN_UNHANDLED_PROMISE,VulnCategory.EXCEPTION),(AlgoFamily.VULN_PUBLIC_S3,VulnCategory.CLOUD),(AlgoFamily.VULN_OVERPRIVILEGED_IAM,VulnCategory.CLOUD),(AlgoFamily.VULN_OPEN_SECURITY_GROUP,VulnCategory.CLOUD),(AlgoFamily.VULN_CONTAINER_ROOT,VulnCategory.CLOUD),(AlgoFamily.VULN_PRIVILEGED_CONTAINER,VulnCategory.CLOUD),(AlgoFamily.VULN_MISSING_ENCRYPTION,VulnCategory.CLOUD),(AlgoFamily.VULN_DOCKER_SECRETS,VulnCategory.CLOUD),(AlgoFamily.VULN_K8S_MISCONFIG,VulnCategory.CLOUD),(AlgoFamily.VULN_EXCESSIVE_DATA,VulnCategory.API_SECURITY),(AlgoFamily.VULN_BOLA,VulnCategory.API_SECURITY),(AlgoFamily.VULN_NO_PAGINATION,VulnCategory.API_SECURITY),(AlgoFamily.VULN_GRAPHQL_INTROSPECTION,VulnCategory.API_SECURITY),(AlgoFamily.VULN_GRAPHQL_DEPTH,VulnCategory.API_SECURITY),(AlgoFamily.VULN_PII_IN_CODE,VulnCategory.DATA_EXPOSURE),(AlgoFamily.VULN_CLEARTEXT_STORAGE,VulnCategory.DATA_EXPOSURE),(AlgoFamily.VULN_SENSITIVE_COMMENT,VulnCategory.DATA_EXPOSURE),(AlgoFamily.VULN_INTERNAL_IP,VulnCategory.DATA_EXPOSURE),(AlgoFamily.VULN_INTERNAL_URL,VulnCategory.DATA_EXPOSURE),(AlgoFamily.VULN_JS_SECRET,VulnCategory.FRONTEND),(AlgoFamily.VULN_SOURCE_MAP,VulnCategory.FRONTEND),(AlgoFamily.VULN_EVAL_USAGE,VulnCategory.FRONTEND),(AlgoFamily.VULN_POSTMESSAGE,VulnCategory.FRONTEND),(AlgoFamily.VULN_LOCALSTORAGE_SENSITIVE,VulnCategory.FRONTEND),(AlgoFamily.VULN_ENV_INLINE,VulnCategory.FRONTEND),(AlgoFamily.VULN_DEBUG_CONSOLE,VulnCategory.FRONTEND)]:
     _VC[_f] = _c
 
@@ -347,4 +362,9 @@ COMPLIANCE_VIOLATIONS: dict[AlgoFamily, list[ComplianceFramework]] = {
     AlgoFamily.VULN_GRAPHQL_INTROSPECTION: [ComplianceFramework.OWASP_API_TOP10],
     AlgoFamily.VULN_MISSING_RATE_LIMIT: [ComplianceFramework.OWASP_TOP10, ComplianceFramework.OWASP_API_TOP10],
     AlgoFamily.VULN_EXCESSIVE_DATA: [ComplianceFramework.OWASP_API_TOP10, ComplianceFramework.GDPR],
+    # PQSI compliance
+    AlgoFamily.HNDL_HARVEST: [ComplianceFramework.NIST_PQC, ComplianceFramework.CNSA_2_0, ComplianceFramework.ETSI_QSC],
+    AlgoFamily.HNDL_STORAGE: [ComplianceFramework.NIST_PQC, ComplianceFramework.CNSA_2_0, ComplianceFramework.ETSI_QSC],
+    AlgoFamily.QUANTUM_RECON: [ComplianceFramework.NIST_PQC, ComplianceFramework.CNSA_2_0],
+    AlgoFamily.CRYPTO_ENUMERATION: [ComplianceFramework.NIST_PQC, ComplianceFramework.CNSA_2_0],
 }

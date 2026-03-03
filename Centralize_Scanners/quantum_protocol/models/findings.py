@@ -51,6 +51,11 @@ CWE_MAP: dict[AlgoFamily, tuple[str, str]] = {
     AlgoFamily.SECRET_GENERIC_API: ("CWE-798", "Hard-coded Credentials"),
     AlgoFamily.SECRET_GENERIC_PASSWORD: ("CWE-798", "Hard-coded Credentials"),
     AlgoFamily.SECRET_GENERIC_SECRET:   ("CWE-798", "Hard-coded Credentials"),
+    # PQSI
+    AlgoFamily.HNDL_HARVEST:            ("CWE-327", "Harvest-Now-Decrypt-Later Activity"),
+    AlgoFamily.HNDL_STORAGE:            ("CWE-327", "Long-Term Ciphertext Storage"),
+    AlgoFamily.QUANTUM_RECON:           ("CWE-200", "Quantum Reconnaissance Activity"),
+    AlgoFamily.CRYPTO_ENUMERATION:      ("CWE-200", "Crypto Enumeration Engine"),
 }
 
 
@@ -84,6 +89,13 @@ class CryptoFinding:
     is_secret: bool = False
     tags: list[str] = field(default_factory=list)
     timestamp: str = field(default_factory=_utcnow)
+    # PQSI fields
+    data_longevity_estimate: Optional[str] = None
+    hndl_probability_score: Optional[float] = None
+    future_decryption_risk: Optional[str] = None
+    quantum_exposure_years: Optional[float] = None
+    migration_urgency: Optional[str] = None
+    pqc_adoption_index: Optional[float] = None
 
     @property
     def is_vuln(self) -> bool:
@@ -179,6 +191,12 @@ class ScanSummary:
     secrets_exposure_score: float = 0.0
     vuln_risk_score: float = 0.0      # NEW
     overall_security_score: float = 0.0
+    # PQSI scores
+    qqsi_score: float = 0.0
+    pqc_adoption_index: float = 0.0
+    hndl_exposure_score: float = 0.0
+    quantum_recon_detected: bool = False
+    migration_priority: str = "unknown"
     languages_detected: list[str] = field(default_factory=list)
     compliance_summary: dict[str, int] = field(default_factory=dict)
     findings: list[CryptoFinding] = field(default_factory=list)

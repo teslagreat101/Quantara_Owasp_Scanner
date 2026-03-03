@@ -1,0 +1,112 @@
+{
+  "liboqs": {
+    "type": "kem+sign",
+    "maturity": "experimental",
+    "algorithms": ["Kyber", "Dilithium", "Falcon", "SPHINCS+", "BIKE", "McEliece"],
+    "description": "Open Quantum Safe C library",
+    "pip": ["liboqs-python", "oqs"],
+    "npm": ["liboqs", "@openquantumsafe/oqs-node"],
+    "go": ["github.com/open-quantum-safe/liboqs-go"],
+    "rust": ["oqs"],
+    "java": ["org.openquantumsafe:liboqs-java"]
+  },
+  "oqs-openssl": {
+    "type": "tls",
+    "maturity": "pilot",
+    "algorithms": ["X25519+Kyber768", "P256+Kyber768"],
+    "description": "OQS fork of OpenSSL with PQC support",
+    "docker": ["openquantumsafe/oqs-openssl", "oqs-provider"],
+    "config_patterns": ["oqsprovider", "oqs-provider"]
+  },
+  "boringssl-pq": {
+    "type": "tls",
+    "maturity": "enterprise",
+    "algorithms": ["X25519+Kyber768", "X25519+MLKEM768"],
+    "description": "Google BoringSSL with post-quantum support",
+    "config_patterns": ["X25519Kyber768", "X25519MLKEM768"]
+  },
+  "wolfssl-pq": {
+    "type": "tls+kem",
+    "maturity": "production",
+    "algorithms": ["Kyber", "Dilithium", "Falcon", "SPHINCS+"],
+    "description": "wolfSSL with post-quantum crypto",
+    "config_patterns": ["wolfSSL_PQC", "WOLFSSL_HAVE_KYBER"]
+  },
+  "aws-lc": {
+    "type": "tls",
+    "maturity": "production",
+    "algorithms": ["Kyber", "ML-KEM-768"],
+    "description": "AWS LibCrypto (AWS-LC) with FIPS PQC",
+    "config_patterns": ["aws-lc", "AWS_LC_FIPS"]
+  },
+  "pqcrypto": {
+    "type": "library",
+    "maturity": "experimental",
+    "algorithms": ["McEliece", "NTRU", "Kyber", "Dilithium"],
+    "description": "Python PQC bindings",
+    "pip": ["pqcrypto"]
+  },
+  "rustls-pq": {
+    "type": "tls",
+    "maturity": "pilot",
+    "algorithms": ["X25519+Kyber768"],
+    "description": "rustls with PQC key exchange",
+    "rust": ["rustls-post-quantum"]
+  },
+  "circl": {
+    "type": "library",
+    "maturity": "enterprise",
+    "algorithms": ["Kyber", "Dilithium", "CSIDH"],
+    "description": "Cloudflare Interoperable Reusable Crypto Library",
+    "go": ["github.com/cloudflare/circl"]
+  },
+  "bouncy-castle-pq": {
+    "type": "library",
+    "maturity": "enterprise",
+    "algorithms": ["Kyber", "Dilithium", "Falcon", "SPHINCS+", "BIKE", "McEliece"],
+    "description": "Bouncy Castle PQC provider for Java/C#",
+    "java": ["org.bouncycastle:bcpqc-jdk18on", "org.bouncycastle:bcpqc-jdk15on"]
+  },
+  "pqc-crystals": {
+    "type": "reference",
+    "maturity": "experimental",
+    "algorithms": ["Kyber", "Dilithium"],
+    "description": "CRYSTALS reference implementations",
+    "pip": ["crystals-kyber", "crystals-dilithium"]
+  },
+  "s2n-tls": {
+    "type": "tls",
+    "maturity": "production",
+    "algorithms": ["Kyber", "ML-KEM"],
+    "description": "AWS s2n-tls with PQC support",
+    "config_patterns": ["s2n_config_set_cipher_preferences.*PQ"]
+  },
+  "nss-pq": {
+    "type": "tls",
+    "maturity": "pilot",
+    "algorithms": ["X25519+Kyber768"],
+    "description": "Mozilla NSS with PQC support (Firefox)",
+    "config_patterns": ["security.tls.enable_kyber"]
+  },
+  "qtls-pq": {
+    "type": "quic",
+    "maturity": "pilot",
+    "algorithms": ["X25519+Kyber768"],
+    "description": "QUIC TLS with PQC support",
+    "go": ["github.com/quic-go/qtls-go"]
+  },
+  "open-quantum-safe-provider": {
+    "type": "provider",
+    "maturity": "pilot",
+    "algorithms": ["Kyber", "Dilithium", "Falcon", "SPHINCS+"],
+    "description": "OpenSSL 3.x provider for PQC algorithms",
+    "config_patterns": ["oqs-provider", "oqsprovider.so", "oqsprovider.dll"]
+  },
+  "mbed-tls-pq": {
+    "type": "tls",
+    "maturity": "experimental",
+    "algorithms": ["Kyber"],
+    "description": "Mbed TLS with experimental PQC",
+    "config_patterns": ["MBEDTLS_PSA_WANT_ALG_KYBER"]
+  }
+}

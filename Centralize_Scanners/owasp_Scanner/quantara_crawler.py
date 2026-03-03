@@ -993,3 +993,91 @@ def graph_to_fuzz_targets(graph: ScanGraph) -> list[dict]:
                 "tags": ep.tags,
             })
     return targets
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Enterprise Integration Layer — added by enterprise refactor
+# Extends the crawler with enterprise BaseScanner-compatible ScanTarget output
+# and deep endpoint prioritization for the adaptive escalation engine.
+# ─────────────────────────────────────────────────────────────────────────────
+import logging as _cr_logging
+
+_cr_logger = _cr_logging.getLogger("enterprise.scanner.crawler")
+
+
+def graph_to_scan_targets(graph: ScanGraph) -> list[dict]:
+    """
+    Convert crawled ScanGraph endpoints to enterprise ScanTarget-compatible dicts.
+    These can be passed directly to BaseScanner.scan() or the EnterpriseScheduler.
+
+    Priority scoring:
+    - Authenticated endpoints with params → HIGH (1)
+    - Endpoints with params → NORMAL (2)
+    - Authenticated, no params → NORMAL (2)
+    - Static endpoints → BACKGROUND (4)
+    """
+    targets = []
+    for ep in graph.all_endpoints():
+        has_auth = any(
+            tag in (ep.tags or [])
+            for tag in ["authenticated", "admin", "api", "graphql"]
+        )
+        has_params = bool(ep.params)
+
+        if has_auth and has_params:
+            priority = 1   # HIGH
+        elif has_params:
+            priority = 2   # NORMAL
+        elif has_auth:
+            priority = 2   # NORMAL
+        else:
+            priority = 4   # BACKGROUND
+
+        targets.append({
+            "url": ep.url,
+            "method": ep.method,
+            "params": ep.params,
+            "headers": ep.headers if hasattr(ep, "headers") else {},
+            "source": ep.source,
+            "tags": ep.tags,
+            "priority": priority,
+            "has_params": has_params,
+            "has_auth": has_auth,
+        })
+
+    targets.sort(key=lambda t: t["priority"])
+    _cr_logger.debug(f"graph_to_scan_targets: {len(targets)} targets extracted")
+    return targets
+
+
+def prioritize_attack_surface(graph: ScanGraph) -> dict:
+    """
+    Produce an enterprise attack surface prioritization report from a ScanGraph.
+    Identifies highest-value targets for the adaptive escalation engine.
+    """
+    all_eps = graph.all_endpoints()
+    high_value = [
+        ep for ep in all_eps
+        if ep.params and any(
+            tag in (ep.tags or [])
+            for tag in ["admin", "api", "authenticated", "graphql", "upload", "payment"]
+        )
+    ]
+    param_rich = sorted(
+        [ep for ep in all_eps if ep.params],
+        key=lambda ep: len(ep.params),
+        reverse=True,
+    )[:20]
+
+    return {
+        "total_endpoints": len(all_eps),
+        "endpoints_with_params": sum(1 for ep in all_eps if ep.params),
+        "high_value_targets": len(high_value),
+        "high_value_urls": [ep.url for ep in high_value[:10]],
+        "top_param_rich": [
+            {"url": ep.url, "params": ep.params}
+            for ep in param_rich[:10]
+        ],
+        "fuzz_targets": graph_to_fuzz_targets(graph),
+        "scan_targets": graph_to_scan_targets(graph),
+    }

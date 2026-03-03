@@ -15,6 +15,7 @@ Detects:
 from __future__ import annotations
 
 import re
+import time as _time
 from dataclasses import dataclass, field
 from typing import Optional
 from pathlib import Path
@@ -369,3 +370,117 @@ def scan_misconfig_directory(
             continue
 
     return all_findings
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Enterprise Integration Layer — added by enterprise refactor
+# ─────────────────────────────────────────────────────────────────────────────
+import logging as _logging
+
+_misc_logger = _logging.getLogger("enterprise.scanner.misconfig")
+
+
+def normalize_misconfig_finding(f: MisconfigFinding, scan_id: str = "") -> dict:
+    """Convert MisconfigFinding to NormalizedFinding-compatible dict."""
+    return {
+        "id": f.id,
+        "scanner_source": "misconfig",
+        "module": "misconfig",
+        "category": f.category,
+        "severity": f.severity.lower(),
+        "title": f.title,
+        "description": f.description,
+        "matched_content": f.matched_content,
+        "cwe": f.cwe,
+        "owasp": "A05:2025",
+        "file": f.file,
+        "line_number": f.line_number,
+        "confidence": f.confidence,
+        "remediation": f.remediation,
+        "tags": list(f.tags) + ["misconfiguration"],
+        "scan_id": scan_id,
+    }
+
+
+def scan_misconfig_file_telemetry(
+    content: str,
+    filepath: str,
+    base_path: str = "",
+    scan_id: str = "",
+) -> tuple[list[MisconfigFinding], dict]:
+    """Wraps scan_misconfig_file() with structured telemetry."""
+    start = _time.monotonic()
+    findings = scan_misconfig_file(content, filepath, base_path)
+    elapsed_ms = (_time.monotonic() - start) * 1000
+    telemetry = {
+        "scanner": "misconfig",
+        "scan_id": scan_id,
+        "file": filepath,
+        "findings_count": len(findings),
+        "duration_ms": round(elapsed_ms, 2),
+        "timestamp": _time.time(),
+    }
+    return findings, telemetry
+
+
+def scan_misconfig_directory_enterprise(
+    root: str,
+    max_files: int = 50_000,
+    scan_id: str = "",
+    on_finding=None,
+) -> tuple[list[MisconfigFinding], dict]:
+    """
+    Enterprise wrapper for scan_misconfig_directory().
+    Adds structured telemetry + optional real-time finding callback.
+    """
+    from pathlib import Path as _Path
+    start = _time.time()
+    findings, files_scanned = [], 0
+    dockerfile_names = {"dockerfile", "docker-compose.yml", "makefile"}
+
+    for fpath in _Path(root).rglob("*"):
+        if files_scanned >= max_files:
+            break
+        if fpath.is_dir() or any(skip in fpath.parts for skip in SKIP_DIRS):
+            continue
+        is_scannable = (
+            fpath.suffix.lower() in SCAN_EXTENSIONS
+            or fpath.name.lower() in dockerfile_names
+        )
+        if not is_scannable:
+            continue
+        try:
+            content = fpath.read_text(encoding="utf-8", errors="ignore")
+            if len(content) > 5_000_000:
+                continue
+            file_findings, _ = scan_misconfig_file_telemetry(
+                content, str(fpath), root, scan_id=scan_id
+            )
+            for f in file_findings:
+                findings.append(f)
+                if on_finding:
+                    try:
+                        on_finding(normalize_misconfig_finding(f, scan_id))
+                    except Exception:
+                        pass
+            files_scanned += 1
+        except (OSError, PermissionError):
+            continue
+
+    telemetry = {
+        "scanner": "misconfig",
+        "scan_id": scan_id,
+        "root": root,
+        "files_scanned": files_scanned,
+        "findings_count": len(findings),
+        "duration_ms": round((_time.time() - start) * 1000, 2),
+        "severity_breakdown": {
+            sev: sum(1 for f in findings if f.severity.lower() == sev)
+            for sev in ["critical", "high", "medium", "low", "info"]
+        },
+    }
+    _misc_logger.info(
+        f"misconfig_scanner: {len(findings)} findings across {files_scanned} files "
+        f"in {telemetry['duration_ms']:.0f}ms"
+    )
+    return findings, telemetry

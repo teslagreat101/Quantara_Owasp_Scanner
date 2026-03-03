@@ -45,37 +45,41 @@ TIER_TO_PLAN = {
 }
 
 PLAN_LIMITS = {
-    "free": 5,
-    "pro": 50,
+    "free": 10,
+    "pro": 200,
     "elite": 1000000,
 }
 
 TIER_CONFIG = {
     SubscriptionTier.FREE: {
-        "monthly_scan_limit": 5,
+        "monthly_scan_limit": 10,
         "max_scan_duration_minutes": 30,
         "storage_limit_mb": 100,
         "features": [
-            "5 scans / month",
-            "OWASP Top 10 detection",
-            "Basic vulnerability reports",
-            "Community support",
+            "10 Scans per Month",
+            "Advance AI Remediation Co-Pilot",
+            "POC Verification",
+            "Attack Path Intelligence and Simulation",
+            "OWASP Top 10 Coverage",
+            "Community Support",
         ],
         "price_monthly": 0,
         "display_name": "Free",
-        "description": "Get started with essential security scanning at no cost.",
+        "description": "Start securing your apps with essential OWASP scanning.",
     },
     SubscriptionTier.PRO: {
-        "monthly_scan_limit": 50,
+        "monthly_scan_limit": 200,
         "max_scan_duration_minutes": 120,
         "storage_limit_mb": 1000,
         "features": [
-            "50 scans / month",
-            "Full OWASP Top 10:2025 coverage",
-            "AI-powered remediation",
-            "Quantara HTTP scanner",
-            "Attack chain correlation",
-            "Priority email support",
+            "200 Scans per Month",
+            "Advance AI Remediation Co-Pilot",
+            "POC Verification",
+            "Attack Path Intelligence and Simulation",
+            "Priority API Access",
+            "OWASP Top 10 Coverage",
+            "Email Support",
+            "Community Support",
         ],
         "price_monthly": 5,
         "display_name": "Pro",
@@ -86,15 +90,18 @@ TIER_CONFIG = {
         "max_scan_duration_minutes": 480,
         "storage_limit_mb": 50000,
         "features": [
-            "Unlimited scans",
-            "All Pro features",
-            "Multi-LLM AI Copilot (Gemini/Claude/GPT)",
-            "OAST out-of-band detection",
-            "Attack surface crawler",
-            "FP reduction pipeline",
-            "Dedicated support & SLA",
+            "Unlimited Quantum Scans",
+            "Advance AI Remediation Co-Pilot",
+            "POC Verification",
+            "Attack Path Intelligence and Simulation",
+            "Priority API Access",
+            "Custom Policy Engine",
+            "OWASP Top 10 Coverage",
+            "24/7 Technical Support",
+            "Email Support",
+            "Community Support",
         ],
-        "price_monthly": 15,
+        "price_monthly": 10,
         "display_name": "Elite",
         "description": "Enterprise-grade intelligence for security operations centers.",
     },
@@ -201,7 +208,7 @@ def _sync_firestore_subscription(
     if not firebase_uid:
         return
     try:
-        limit = PLAN_LIMITS.get(plan_name, 5)
+        limit = PLAN_LIMITS.get(plan_name, 10)
         user_ref = firestore_db.collection("users").document(firebase_uid)
         user_ref.set(
             {
@@ -475,11 +482,11 @@ class BillingService:
         try:
             user = db_sql.query(User).filter(User.id == user_id).first()
             if not user:
-                return {"status": "none", "tier": "free", "scans_used": 0, "scans_limit": 5}
+                return {"status": "none", "tier": "free", "scans_used": 0, "scans_limit": 10}
 
             plan_name = TIER_TO_PLAN.get(user.subscription_tier, "free")
             scans_used = 0
-            scans_limit = user.monthly_scan_limit or PLAN_LIMITS.get(plan_name, 5)
+            scans_limit = user.monthly_scan_limit or PLAN_LIMITS.get(plan_name, 10)
             current_period_end = None
 
             # Pull accurate period_end from Stripe when available
@@ -632,7 +639,7 @@ class BillingService:
                         data = doc.to_dict()
                         return {
                             "scans_this_month": data.get("scansUsedThisMonth", 0),
-                            "scan_limit": data.get("scanLimit", 5),
+                            "scan_limit": data.get("scanLimit", 10),
                             "storage_used_mb": 0,
                             "plan": data.get("plan", "free"),
                         }
